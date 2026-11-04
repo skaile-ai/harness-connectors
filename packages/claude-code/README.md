@@ -62,9 +62,13 @@ first one reports `replaced`. The plugin never takes it back on its own (two win
 take turns forever): run `/skaile reconnect` in the window that should have it.
 
 The plugin also stops reconnecting after `revoked` (create a new token) and
-`unsupported_version` (update the plugin). Otherwise it reconnects with capped exponential
-backoff, waits as long as Skaile says after too many connection attempts, and drops a
-connection that has been silent for 90 seconds.
+`unsupported_version` (update the plugin). Skaile can refuse a valid token for a short while,
+so after `unauthorized` it keeps retrying and stops only once the token has been refused
+without a break for 5 minutes: then store a current token, or run `/skaile reconnect` to try
+the same one again. Otherwise it reconnects with capped exponential backoff (starting again
+from the first delay only after a connection has stayed up for a minute), waits as long as
+Skaile says after too many connection attempts, and drops a connection that has been silent
+for 90 seconds.
 
 ## Configuration
 

@@ -306,13 +306,13 @@ describe('reconnect rules', () => {
       const status = c.getStatus()
       return status.state === 'stopped' && status.reason === 'unauthorized'
     }, 5_000)
-    expect(server.connectAttempts.length).toBeGreaterThan(1)
+    expect(server.connectAttempts.length).toBeGreaterThanOrEqual(3)
     expect(server.connections).toHaveLength(0)
     // The same token is not tried again by a tool call; only a new token or /skaile reconnect does.
     const attempts = server.connectAttempts.length
     const refused = await rejection(c.listPeers())
     expect(refused.code).toBe('unauthorized')
-    expect(refused.message).toMatch(/for over 5 minutes/)
+    expect(refused.message).toMatch(/\/skaile reconnect to try this one again/)
     expect(server.connectAttempts).toHaveLength(attempts)
   })
 
@@ -334,15 +334,34 @@ describe('reconnect rules', () => {
     await setup()
     const c = client(new MemoryTokenStore(TOKEN), { stableAfterMs: 50 })
     await c.ensureConnected()
+    let closedAt = 0
     for (let n = 1; n <= 4; n++) {
       await server.until(() => server.connections.length === n && server.live('ra_1'), 5_000)
       await new Promise((resolve) => setTimeout(resolve, 70))
+      closedAt = Date.now()
       server.live('ra_1')?.close(1001, 'shutdown')
     }
     await server.until(() => server.connections.length === 5, 5_000)
-    const at = server.connectAttempts.map((a) => a.at)
-    // Each connection lived past stableAfterMs, so every reconnect waits the first delay (10-20 ms) again.
-    expect((at[4] ?? 0) - (at[3] ?? 0)).toBeLessThan(70 + 60)
+    // Each connection lived past stableAfterMs, so the reconnect waits the first delay (10-20 ms)
+    // again; without the reset, attempt 4 would wait 80-160 ms.
+    expect((server.connectAttempts[4]?.at ?? 0) - closedAt).toBeLessThan(75)
+  })
+
+  it('gives a new token its own refusal clock after a stop', async () => {
+    await setup()
+    const tokens = new MemoryTokenStore(`skr_${'z'.repeat(43)}`)
+    const c = client(tokens, { unauthorizedGiveUpMs: 100 })
+    c.start()
+    await server.until(() => {
+      const status = c.getStatus()
+      return status.state === 'stopped' && status.reason === 'unauthorized'
+    }, 5_000)
+    // The new token is refused once (standing briefly unreadable); the client keeps trying it.
+    tokens.token = TOKEN
+    server.refuseNext.push({ status: 401, code: 'unauthorized' })
+    await rejection(c.listPeers())
+    expect(c.getStatus().state).toBe('retrying')
+    await server.until(() => c.getStatus().state === 'connected', 5_000)
   })
 
   it('drops a silent connection after the heartbeat timeout and reconnects', async () => {

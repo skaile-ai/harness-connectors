@@ -93,6 +93,8 @@ const MAX_EARLY_FRAMES = 100
  * outage must not stop the client.
  */
 export const UNAUTHORIZED_GIVE_UP_MS = 5 * 60_000
+/** And at least this many refusals, so a sleep or a network outage between two cannot stop the client. */
+const MIN_UNAUTHORIZED_REFUSALS = 3
 /** A connection that stayed up this long resets the backoff; a shorter one keeps it growing. */
 export const STABLE_CONNECTION_MS = 60_000
 
@@ -125,6 +127,7 @@ export class SkaileClient {
   private attempt = 0
   /** When (epoch ms) the current run of unauthorized refusals began; null when none. */
   private unauthorizedSince: number | null = null
+  private unauthorizedCount = 0
   private retryTimer: ReturnType<typeof setTimeout> | null = null
   /** Not before this (epoch ms): a 429's `retryAfterMs`, which even a tool call respects. */
   private notBefore = 0
@@ -211,7 +214,7 @@ export class SkaileClient {
     this.clearRetry()
     this.status = { state: 'connecting', attempt: 0 }
     this.attempt = 0
-    this.unauthorizedSince = null
+    this.resetUnauthorized()
     this.stoppedToken = null
     await this.connect().catch(() => undefined)
     return this.status
@@ -446,7 +449,7 @@ export class SkaileClient {
     }
     this.startHeartbeat(this.live)
     // The token was accepted. The backoff resets only once the connection has stayed up (endLive).
-    this.unauthorizedSince = null
+    this.resetUnauthorized()
     this.stoppedToken = null
     this.status = {
       state: 'connected',
@@ -504,12 +507,17 @@ export class SkaileClient {
 
   /**
    * The server may refuse a valid token for a while (account standing unreadable); keep retrying
-   * with backoff, and give up only once it has been refused without a break for unauthorizedGiveUpMs.
+   * with backoff, and give up only once it has been refused without a break for unauthorizedGiveUpMs
+   * and at least MIN_UNAUTHORIZED_REFUSALS times.
    */
   private onUnauthorized(token: string): void {
     const now = Date.now()
     this.unauthorizedSince ??= now
-    if (now - this.unauthorizedSince >= this.unauthorizedGiveUpMs) {
+    this.unauthorizedCount += 1
+    if (
+      this.unauthorizedCount >= MIN_UNAUTHORIZED_REFUSALS &&
+      now - this.unauthorizedSince >= this.unauthorizedGiveUpMs
+    ) {
       this.stop('unauthorized', describeError('unauthorized'), token)
       return
     }
@@ -555,8 +563,16 @@ export class SkaileClient {
     }
   }
 
+  private resetUnauthorized(): void {
+    this.unauthorizedSince = null
+    this.unauthorizedCount = 0
+  }
+
   private stop(reason: StopReason, message: string, token: string | null): void {
     this.clearRetry()
+    // A new token (or /skaile reconnect) starts afresh: its own refusal clock and the first delay.
+    this.resetUnauthorized()
+    this.attempt = 0
     this.stoppedToken = token
     this.status = { state: 'stopped', reason, message }
     this.log(`stopped: ${message}`)
