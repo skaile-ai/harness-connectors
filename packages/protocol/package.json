@@ -1,0 +1,18 @@
+{
+  "name": "@skaile/harness-protocol",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Zod schemas for the Skaile harness channel wire protocol, v1.0.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "zod": "4.6.7"
+  }
+}

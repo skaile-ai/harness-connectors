@@ -1,0 +1,38 @@
+name: CI
+
+# Pull requests only: the repository is private, so every run costs minutes.
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Lint
+        run: npm run lint
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Test
+        run: npm test
+      - name: Bundled plugin is up to date
+        # Plugins install from git with no build step, so the committed dist/ must match the source.
+        run: |
+          npm run build
+          git diff --exit-code -- packages/claude-code/dist || {
+            echo "::error::packages/claude-code/dist is stale: run npm run build and commit dist/"
+            exit 1
+          }
