@@ -57,6 +57,10 @@ export type ClientOptions = {
   /** Reconnect backoff: first delay and cap. */
   backoffBaseMs?: number
   backoffMaxMs?: number
+  /** How long the token must be refused without a break before the client stops; shortened in tests. */
+  unauthorizedGiveUpMs?: number
+  /** How long a connection must stay up before the backoff starts again from the first delay. */
+  stableAfterMs?: number
   log?: (message: string) => void
 }
 
@@ -83,8 +87,14 @@ export const MAX_RETRY_AFTER_MS = 3_600_000
 /** Frames kept from before the `welcome` was processed; a server has no reason to send more. */
 const MAX_EARLY_FRAMES = 100
 
-/** Unauthorized refusals in a row before the token counts as one to replace. */
-const MAX_UNAUTHORIZED = 3
+/**
+ * How long the token must be refused without a break before it counts as one to replace. The
+ * server refuses a valid token for a while when it cannot read its owner's standing, so a short
+ * outage must not stop the client.
+ */
+export const UNAUTHORIZED_GIVE_UP_MS = 5 * 60_000
+/** A connection that stayed up this long resets the backoff; a shorter one keeps it growing. */
+export const STABLE_CONNECTION_MS = 60_000
 
 /**
  * One connection to Skaile over the harness channel (protocol v1). Keeps it alive (heartbeat,
@@ -104,6 +114,8 @@ export class SkaileClient {
   readonly askTimeoutMs: number
   private readonly backoffBaseMs: number
   private readonly backoffMaxMs: number
+  private readonly unauthorizedGiveUpMs: number
+  private readonly stableAfterMs: number
   private readonly log: (message: string) => void
 
   private status: ConnectionStatus = { state: 'stopped', reason: 'no_token', message: 'not started' }
@@ -111,7 +123,8 @@ export class SkaileClient {
   /** Incremented per connection, so callbacks of an old one are ignored. */
   private generation = 0
   private attempt = 0
-  private unauthorizedInARow = 0
+  /** When (epoch ms) the current run of unauthorized refusals began; null when none. */
+  private unauthorizedSince: number | null = null
   private retryTimer: ReturnType<typeof setTimeout> | null = null
   /** Not before this (epoch ms): a 429's `retryAfterMs`, which even a tool call respects. */
   private notBefore = 0
@@ -135,6 +148,8 @@ export class SkaileClient {
     this.askTimeoutMs = options.askTimeoutMs ?? ASK_TIMEOUT_MS
     this.backoffBaseMs = options.backoffBaseMs ?? 1_000
     this.backoffMaxMs = options.backoffMaxMs ?? 60_000
+    this.unauthorizedGiveUpMs = options.unauthorizedGiveUpMs ?? UNAUTHORIZED_GIVE_UP_MS
+    this.stableAfterMs = options.stableAfterMs ?? STABLE_CONNECTION_MS
     this.log = options.log ?? (() => undefined)
   }
 
@@ -196,7 +211,7 @@ export class SkaileClient {
     this.clearRetry()
     this.status = { state: 'connecting', attempt: 0 }
     this.attempt = 0
-    this.unauthorizedInARow = 0
+    this.unauthorizedSince = null
     this.stoppedToken = null
     await this.connect().catch(() => undefined)
     return this.status
@@ -430,8 +445,8 @@ export class SkaileClient {
       heartbeat: null,
     }
     this.startHeartbeat(this.live)
-    this.attempt = 0
-    this.unauthorizedInARow = 0
+    // The token was accepted. The backoff resets only once the connection has stayed up (endLive).
+    this.unauthorizedSince = null
     this.stoppedToken = null
     this.status = {
       state: 'connected',
@@ -487,14 +502,18 @@ export class SkaileClient {
     this.scheduleRetry((error as Error).message)
   }
 
-  /** The server may refuse a valid token for a while (account standing unreadable); retry, then give up. */
+  /**
+   * The server may refuse a valid token for a while (account standing unreadable); keep retrying
+   * with backoff, and give up only once it has been refused without a break for unauthorizedGiveUpMs.
+   */
   private onUnauthorized(token: string): void {
-    this.unauthorizedInARow += 1
-    if (this.unauthorizedInARow >= MAX_UNAUTHORIZED) {
+    const now = Date.now()
+    this.unauthorizedSince ??= now
+    if (now - this.unauthorizedSince >= this.unauthorizedGiveUpMs) {
       this.stop('unauthorized', describeError('unauthorized'), token)
       return
     }
-    this.scheduleRetry('Skaile refused the token')
+    this.scheduleRetry('Skaile refused the token; retrying, as the refusal may be temporary')
   }
 
   private afterError(frame: HarnessChannelErrorFrame, token: string): void {
@@ -705,6 +724,9 @@ export class SkaileClient {
       clearInterval(live.heartbeat)
     }
     live.transport.close()
+    if (Date.now() - live.since.getTime() >= this.stableAfterMs) {
+      this.attempt = 0
+    }
     this.afterClose(code, reason, live.token)
     // The server ends an ask whose connection dropped with peer_offline; say so at once.
     const status = this.status

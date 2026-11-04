@@ -22,7 +22,13 @@ export class MemoryTokenStore implements TokenStore {
 export function makeClient(
   apiUrl: string,
   tokens: TokenStore,
-  options: { transport?: TransportMode; heartbeatTimeoutMs?: number; askTimeoutMs?: number } = {},
+  options: {
+    transport?: TransportMode
+    heartbeatTimeoutMs?: number
+    askTimeoutMs?: number
+    unauthorizedGiveUpMs?: number
+    stableAfterMs?: number
+  } = {},
 ): SkaileClient {
   return new SkaileClient({
     config: { apiUrl, transport: options.transport ?? 'auto' },
@@ -32,5 +38,7 @@ export function makeClient(
     askTimeoutMs: options.askTimeoutMs ?? 5_000,
     backoffBaseMs: 20,
     backoffMaxMs: 200,
+    ...(options.unauthorizedGiveUpMs === undefined ? {} : { unauthorizedGiveUpMs: options.unauthorizedGiveUpMs }),
+    ...(options.stableAfterMs === undefined ? {} : { stableAfterMs: options.stableAfterMs }),
   })
 }

@@ -34,7 +34,7 @@ export function describeError(code: SkaileErrorCode, detail?: string, retryAfter
     case 'unsupported_version':
       return 'unsupported_version: Skaile does not accept this plugin’s protocol version (1.0). The user needs to update the Skaile Claude Code plugin.'
     case 'unauthorized':
-      return 'unauthorized: Skaile refused the token (it was rotated, or its owner lost access to the agent). The user runs /skaile connect with a current token.'
+      return 'unauthorized: Skaile has refused the token for over 5 minutes (it was rotated, or its owner lost access to the agent). The user runs /skaile connect with a current token, or /skaile reconnect to try the same token again.'
     case 'replaced':
       return 'replaced: another Claude Code session took over this agent’s Skaile connection (an agent has one live connection, the newest). Run /skaile reconnect in this session to take it back.'
     case 'no_token':

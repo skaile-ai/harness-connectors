@@ -276,6 +276,75 @@ describe('reconnect rules', () => {
     await server.until(() => server.connections.length === 2 && c.getStatus().state === 'connected')
   })
 
+  it('keeps retrying through a short unauthorized outage and connects once it ends', async () => {
+    await setup()
+    // More refusals than a count of three would allow, all within the give-up time.
+    for (let i = 0; i < 4; i++) {
+      server.refuseNext.push({ status: 401, code: 'unauthorized' })
+    }
+    const c = client(new MemoryTokenStore(TOKEN), { unauthorizedGiveUpMs: 10_000 })
+    c.start()
+    await server.until(() => c.getStatus().state === 'connected', 5_000)
+    expect(server.connectAttempts).toHaveLength(5)
+  })
+
+  it('keeps retrying after a 4401 close behind a welcome, then reconnects', async () => {
+    await setup()
+    const c = client(new MemoryTokenStore(TOKEN), { unauthorizedGiveUpMs: 10_000 })
+    await c.ensureConnected()
+    server.refuseNext.push({ status: 401, code: 'unauthorized' }, { status: 401, code: 'unauthorized' })
+    server.live('ra_1')?.close(4401, 'unauthorized')
+    await server.until(() => server.connections.length === 2 && c.getStatus().state === 'connected', 5_000)
+    expect(server.connectAttempts).toHaveLength(4)
+  })
+
+  it('stops once the token has been refused without a break for the give-up time, and connects nothing', async () => {
+    await setup()
+    const c = client(new MemoryTokenStore(`skr_${'z'.repeat(43)}`), { unauthorizedGiveUpMs: 150 })
+    c.start()
+    await server.until(() => {
+      const status = c.getStatus()
+      return status.state === 'stopped' && status.reason === 'unauthorized'
+    }, 5_000)
+    expect(server.connectAttempts.length).toBeGreaterThan(1)
+    expect(server.connections).toHaveLength(0)
+    // The same token is not tried again by a tool call; only a new token or /skaile reconnect does.
+    const attempts = server.connectAttempts.length
+    const refused = await rejection(c.listPeers())
+    expect(refused.code).toBe('unauthorized')
+    expect(refused.message).toMatch(/for over 5 minutes/)
+    expect(server.connectAttempts).toHaveLength(attempts)
+  })
+
+  it('grows the backoff when each connection dies right after the welcome', async () => {
+    await setup()
+    const c = client()
+    await c.ensureConnected()
+    for (let n = 1; n <= 5; n++) {
+      await server.until(() => server.connections.length === n && server.live('ra_1'), 5_000)
+      server.live('ra_1')?.close(1001, 'shutdown')
+    }
+    await server.until(() => server.connections.length === 6, 5_000)
+    const at = server.connectAttempts.map((a) => a.at)
+    // Attempt 5 waits at least half of min(200, 20 * 2^4) ms; without the growth it would be 10-20 ms.
+    expect((at[5] ?? 0) - (at[4] ?? 0)).toBeGreaterThanOrEqual(95)
+  })
+
+  it('starts the backoff again after a connection that stayed up', async () => {
+    await setup()
+    const c = client(new MemoryTokenStore(TOKEN), { stableAfterMs: 50 })
+    await c.ensureConnected()
+    for (let n = 1; n <= 4; n++) {
+      await server.until(() => server.connections.length === n && server.live('ra_1'), 5_000)
+      await new Promise((resolve) => setTimeout(resolve, 70))
+      server.live('ra_1')?.close(1001, 'shutdown')
+    }
+    await server.until(() => server.connections.length === 5, 5_000)
+    const at = server.connectAttempts.map((a) => a.at)
+    // Each connection lived past stableAfterMs, so every reconnect waits the first delay (10-20 ms) again.
+    expect((at[4] ?? 0) - (at[3] ?? 0)).toBeLessThan(70 + 60)
+  })
+
   it('drops a silent connection after the heartbeat timeout and reconnects', async () => {
     await setup({ heartbeatIntervalMs: 50 })
     const c = client(new MemoryTokenStore(TOKEN), { heartbeatTimeoutMs: 300 })
