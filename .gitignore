@@ -1,0 +1,6 @@
+node_modules/
+coverage/
+*.log
+.DS_Store
+# dist/ is committed on purpose for packages/claude-code: plugins install from git without a build.
+packages/protocol/dist/
