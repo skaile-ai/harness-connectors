@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process'
 import { chmod, mkdir, open, readFile, rename, rm } from 'node:fs/promises'
-import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { configDir, realHome } from './paths.js'
 
 /**
  * A remote-agent token: `skr_` and the base64url of 32 random bytes. The charset check also
@@ -33,7 +33,6 @@ export type Runner = (command: string, args: string[], input: string) => Promise
 
 export type TokenStoreOptions = {
   platform?: NodeJS.Platform
-  env?: NodeJS.ProcessEnv
   home?: string
   run?: Runner
 }
@@ -42,16 +41,10 @@ export function isValidToken(token: string): boolean {
   return TOKEN_PATTERN.test(token)
 }
 
-/** `$XDG_CONFIG_HOME/skaile` or `~/.config/skaile`: always under the user's home, never the project. */
-export function configDir(env: NodeJS.ProcessEnv = process.env, home: string = homedir()): string {
-  const xdg = env.XDG_CONFIG_HOME?.trim()
-  return join(xdg?.startsWith('/') ? xdg : join(home, '.config'), 'skaile')
-}
-
 export function createTokenStore(options: TokenStoreOptions = {}): TokenStore {
   const platform = options.platform ?? process.platform
   const run = options.run ?? runProgram
-  const dir = configDir(options.env ?? process.env, options.home ?? homedir())
+  const dir = configDir(options.home ?? realHome())
   const file = join(dir, 'token')
   const keychain = keychainFor(platform, run)
 
@@ -78,7 +71,7 @@ export function createTokenStore(options: TokenStoreOptions = {}): TokenStore {
         await rm(file, { force: true })
         return { location: 'keychain', detail: keychain.name }
       }
-      await writePrivateFile(dir, file, token)
+      await writePrivateFile(dir, file, `${token}\n`)
       return { location: 'file', detail: file }
     },
 
@@ -145,13 +138,16 @@ function keychainFor(platform: NodeJS.Platform, run: Runner): Keychain | null {
   return null
 }
 
-async function writePrivateFile(dir: string, file: string, token: string): Promise<void> {
+/** Writes `content` to `file` with mode 0600, atomically, creating `dir` with mode 0700. */
+export async function writePrivateFile(dir: string, file: string, content: string): Promise<void> {
   await mkdir(dir, { recursive: true, mode: 0o700 })
   const temp = `${file}.${process.pid}.tmp`
-  // Created 0600, so the token is never readable by others, not even for a moment.
-  const handle = await open(temp, 'w', 0o600)
+  await rm(temp, { force: true })
+  // `wx` creates a new file (no symlink followed, no leftover reused) with mode 0600, so the
+  // content is never readable by others, not even for a moment.
+  const handle = await open(temp, 'wx', 0o600)
   try {
-    await handle.writeFile(`${token}\n`, 'utf8')
+    await handle.writeFile(content, 'utf8')
   } finally {
     await handle.close()
   }

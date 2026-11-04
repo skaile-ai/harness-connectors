@@ -24,23 +24,23 @@ sessions it can reach.
 3. `/skaile status` shows whether Claude Code is connected, the remote agent and the linked
    sessions.
 
-| Command | What it does |
-| --- | --- |
-| `/skaile connect <token>` | Store the token and connect |
-| `/skaile connect` | Show the terminal command that stores a token without the chat |
-| `/skaile status` | Connection, agent and linked sessions |
-| `/skaile reconnect` | Connect again, taking the connection over from another Claude Code window |
-| `/skaile disconnect` | Remove the stored token and disconnect |
+| Command                   | What it does                                                              |
+| ------------------------- | ------------------------------------------------------------------------- |
+| `/skaile connect <token>` | Store the token and connect                                               |
+| `/skaile connect`         | Show the terminal command that stores a token without the chat            |
+| `/skaile status`          | Connection, agent and linked sessions                                     |
+| `/skaile reconnect`       | Connect again, taking the connection over from another Claude Code window |
+| `/skaile disconnect`      | Remove the stored token and disconnect                                    |
 
 ## Tools
 
-| Tool | |
-| --- | --- |
-| `ask_skaile(peer, message)` | Ask a linked session and wait for the answer (up to 5½ minutes; Skaile itself gives up after 5) |
-| `send_skaile(peer, message)` | Send a message without waiting for an answer |
-| `list_skaile_peers()` | The linked sessions, with sessionId, name and whether they are online |
-| `skaile_status()` | Used by `/skaile status` |
-| `skaile_reconnect()` | Used by `/skaile reconnect` and `/skaile connect` |
+| Tool                         |                                                                                                                                                      |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ask_skaile(peer, message)`  | Ask a linked session and wait for the answer. Skaile gives a session 5 minutes once it is awake; waking a hibernated one can take a few minutes more |
+| `send_skaile(peer, message)` | Send a message without waiting for an answer                                                                                                         |
+| `list_skaile_peers()`        | The linked sessions, with sessionId, name and whether they are online                                                                                |
+| `skaile_status()`            | Used by `/skaile status`                                                                                                                             |
+| `skaile_reconnect()`         | Used by `/skaile reconnect` and `/skaile connect`                                                                                                    |
 
 `peer` is a session's sessionId, or a display name or agent name that only one linked session
 has. A name two sessions share is refused with both listed.
@@ -63,13 +63,13 @@ connection that has been silent for 90 seconds.
 
 ## Configuration
 
-| Variable | Default | |
-| --- | --- | --- |
-| `SKAILE_API_URL` | `https://platform-api.skaile.ai` | The Skaile API. `http://` is allowed for localhost only. |
-| `SKAILE_TRANSPORT` | `auto` | `auto` uses the WebSocket and falls back to long-poll when a proxy blocks it; `websocket` or `long-poll` forces one. |
+| Variable           | Default                          |                                                                                                                      |
+| ------------------ | -------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `SKAILE_API_URL`   | `https://platform-api.skaile.ai` | The Skaile API. `http://` is allowed for localhost only.                                                             |
+| `SKAILE_TRANSPORT` | `auto`                           | `auto` uses the WebSocket and falls back to long-poll when a proxy blocks it; `websocket` or `long-poll` forces one. |
 
 ## Not yet
 
-Questions and messages *from* Skaile sessions to Claude Code arrive in a later version. Until
+Questions and messages _from_ Skaile sessions to Claude Code arrive in a later version. Until
 then the plugin declines a question from Skaile at once (`peer_offline`) and acknowledges a
 message without showing it.

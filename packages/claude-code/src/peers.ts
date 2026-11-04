@@ -3,8 +3,14 @@ import { SkaileError } from './errors.js'
 
 /** One line per peer, for tool output and error messages. */
 export function describePeer(peer: HarnessChannelPeer): string {
-  const agent = peer.agentName ? `, agent ${peer.agentName}` : ''
-  return `${peer.name || '(no name)'} (sessionId ${peer.sessionId}${agent}, ${peer.online ? 'online' : 'offline'})`
+  const agent = peer.agentName ? `, agent ${oneLine(peer.agentName)}` : ''
+  return `${oneLine(peer.name) || '(no name)'} (sessionId ${oneLine(peer.sessionId)}${agent}, ${peer.online ? 'online' : 'offline'})`
+}
+
+/** Names come from the server: keep each on one line, so a name cannot pose as more tool output. */
+export function oneLine(value: string): string {
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: stripping control characters is the point.
+  return value.replace(/[\u0000-\u001f\u007f\u2028\u2029]+/g, ' ').trim()
 }
 
 /**

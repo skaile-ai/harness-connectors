@@ -83,3 +83,27 @@ describe('the terminal path', () => {
     expect(tokens.token).toBeNull()
   })
 })
+
+describe('set-api-url', () => {
+  it('saves a trusted API URL from the terminal and clears it', async () => {
+    const saved: (string | null)[] = []
+    const { value, out } = io('')
+    value.saveApiUrl = async (url) => {
+      saved.push(url)
+      return url
+    }
+    expect(await runCli(['set-api-url', 'https://skaile.corp.example'], value)).toBe(0)
+    expect(await runCli(['set-api-url', '--clear'], value)).toBe(0)
+    expect(saved).toEqual(['https://skaile.corp.example', null])
+    expect(out.join('')).toMatch(/Saved https:\/\/skaile\.corp\.example/)
+  })
+
+  it('is not reachable from the /skaile command', async () => {
+    const { value, out } = io('set-api-url https://evil.example')
+    value.saveApiUrl = async () => {
+      throw new Error('must not be called')
+    }
+    expect(await runCli(['command'], value)).toBe(1)
+    expect(out.join('')).toMatch(/Unknown \/skaile command/)
+  })
+})

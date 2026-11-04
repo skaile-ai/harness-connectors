@@ -23,8 +23,16 @@ import { CLIENT_VERSION, HARNESS_KIND } from './version.js'
 
 /** The server ends an unanswered ask after A2A_ASK_TIMEOUT_MS (5 min) with `timeout`. */
 export const SERVER_ASK_TIMEOUT_MS = 300_000
-/** Waits a little past the server's own timeout, so the server's `timeout` error arrives first. */
-export const ASK_TIMEOUT_MS = SERVER_ASK_TIMEOUT_MS + 30_000
+/**
+ * The server starts its 5 minutes only once the session is awake, and waking a hibernated session
+ * can take minutes. The server always ends an exchange (`answer`, `error` `timeout`, or the close
+ * of the connection, which this client notices at once or by the heartbeat), so this cap is a
+ * safety net that must not fire first: the server's timeout, 30 s of slack, and 10 min for a wake.
+ */
+export const ASK_WAKE_ALLOWANCE_MS = 600_000
+export const ASK_TIMEOUT_MS = SERVER_ASK_TIMEOUT_MS + 30_000 + ASK_WAKE_ALLOWANCE_MS
+/** After WebSocket was unreachable and long-poll worked, reconnects use long-poll for this long. */
+const PREFER_LONG_POLL_MS = 3_600_000
 
 /** Why the client stopped and will not reconnect on its own. */
 export type StopReason = 'replaced' | 'revoked' | 'unsupported_version' | 'unauthorized' | 'no_token' | 'closed'
@@ -70,6 +78,11 @@ type Live = {
   heartbeat: ReturnType<typeof setInterval> | null
 }
 
+/** A server's `retryAfterMs` is honoured up to this; a larger (or corrupt) value would overflow the timer. */
+export const MAX_RETRY_AFTER_MS = 3_600_000
+/** Frames kept from before the `welcome` was processed; a server has no reason to send more. */
+const MAX_EARLY_FRAMES = 100
+
 /** Unauthorized refusals in a row before the token counts as one to replace. */
 const MAX_UNAUTHORIZED = 3
 
@@ -106,8 +119,8 @@ export class SkaileClient {
   private closed = false
   /** The token a stop was about: a different stored token lifts `revoked`/`unauthorized`. */
   private stoppedToken: string | null = null
-  /** Set once WebSocket was unreachable and long-poll worked: later reconnects start with long-poll. */
-  private preferLongPoll = false
+  /** Until then (epoch ms) reconnects start with long-poll: WebSocket was unreachable and long-poll worked. */
+  private preferLongPollUntil = 0
   private lastPeers: { peers: HarnessChannelPeer[]; at: Date } | null = null
   private readonly pendingReplies = new Map<string, Pending>()
   private readonly pendingAsks = new Map<string, Pending>()
@@ -320,6 +333,8 @@ export class SkaileClient {
     }
     /** Frames that came behind the `welcome` before the connection was set up; replayed after. */
     const early: string[] = []
+    /** A close that came after the `welcome` but before the connection was set up. */
+    let earlyClose: { code: number; reason: string } | null = null
     let welcomed: (frame: HarnessChannelFrame) => void = () => undefined
     let lost: (code: number, reason: string) => void = () => undefined
     const handshake = new Promise<HarnessChannelFrame | { closed: number; reason: string }>((resolve) => {
@@ -338,7 +353,7 @@ export class SkaileClient {
             welcomed(parsed.frame)
           } else if (parsed.ok && parsed.frame.type === 'error' && !parsed.frame.replyTo) {
             welcomed(parsed.frame)
-          } else {
+          } else if (early.length < MAX_EARLY_FRAMES) {
             early.push(raw)
           }
           return
@@ -350,6 +365,8 @@ export class SkaileClient {
           return
         }
         if (!this.live) {
+          // Settles the handshake when it is still waiting; otherwise kept for after the setup.
+          earlyClose = { code, reason }
           lost(code, reason)
           return
         }
@@ -428,13 +445,17 @@ export class SkaileClient {
         this.onFrame(this.live, raw)
       }
     }
+    const closedMeanwhile = earlyClose as { code: number; reason: string } | null
+    if (closedMeanwhile && this.live) {
+      this.endLive(this.live, closedMeanwhile.code, closedMeanwhile.reason)
+    }
   }
 
   /** WebSocket first, long-poll when the WebSocket cannot be reached (a proxy, a firewall). */
   private async open(token: string, hello: HarnessChannelFrame, events: Parameters<OpenTransport>[0]['events']) {
     const options = { apiUrl: this.config.apiUrl, token, firstFrame: hello, events }
     const mode = this.config.transport
-    if (mode === 'long-poll' || (mode === 'auto' && this.preferLongPoll)) {
+    if (mode === 'long-poll' || (mode === 'auto' && Date.now() < this.preferLongPollUntil)) {
       return this.openPoll(options)
     }
     try {
@@ -445,7 +466,7 @@ export class SkaileClient {
       }
       this.log(`WebSocket unreachable (${error.message}); trying long-poll`)
       const transport = await this.openPoll(options)
-      this.preferLongPoll = true
+      this.preferLongPollUntil = Date.now() + PREFER_LONG_POLL_MS
       return transport
     }
   }
@@ -522,11 +543,12 @@ export class SkaileClient {
     this.log(`stopped: ${message}`)
   }
 
-  private scheduleRetry(lastError: string, retryAfterMs?: number): void {
+  private scheduleRetry(lastError: string, serverRetryAfterMs?: number): void {
     this.clearRetry()
     if (this.closed) {
       return
     }
+    const retryAfterMs = serverRetryAfterMs === undefined ? undefined : Math.min(serverRetryAfterMs, MAX_RETRY_AFTER_MS)
     const backoff = Math.min(this.backoffMaxMs, this.backoffBaseMs * 2 ** Math.max(0, this.attempt - 1))
     // Jitter, so many clients that lost the same server do not come back in step.
     const jittered = Math.round(backoff / 2 + Math.random() * (backoff / 2))
@@ -635,7 +657,7 @@ export class SkaileClient {
 
   private onError(live: Live, frame: HarnessChannelErrorFrame): void {
     if (frame.code === 'rate_limited' && frame.retryAfterMs !== undefined) {
-      this.notBefore = Date.now() + frame.retryAfterMs
+      this.notBefore = Date.now() + Math.min(frame.retryAfterMs, MAX_RETRY_AFTER_MS)
     }
     const byReply = frame.replyTo ? this.settle(this.pendingReplies, frame.replyTo) : undefined
     if (byReply) {

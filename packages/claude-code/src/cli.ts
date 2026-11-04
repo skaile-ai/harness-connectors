@@ -1,13 +1,17 @@
+import { saveApiUrl } from './config.js'
 import { isValidToken, type TokenStore } from './token-store.js'
 
 /**
  * The plugin's small CLI.
  *
  * - `cli.cjs command` is what `/skaile` runs: it reads the command's arguments from stdin (so
- *   the token is never a process argument of node) and prints what the model should do next.
+ *   the token is not a process argument of node; Claude Code's own `bash -c` for the command
+ *   line still carries it briefly) and prints what the model should do next.
  * - `cli.cjs connect` is the terminal path: it reads the token from stdin (hidden when typed),
  *   so the token never enters the Claude Code conversation.
  * - `cli.cjs disconnect` removes the stored token.
+ * - `cli.cjs set-api-url <url>|--clear` trusts a Skaile API host other than skaile.ai (a
+ *   self-hosted Skaile). Terminal only, so neither a project's settings nor the model can set it.
  *
  * It never opens a connection to Skaile: an agent has one live connection, and a second one
  * would replace the MCP server's. Status and reconnect go through the MCP server's tools.
@@ -21,6 +25,8 @@ export type CliIo = {
   tokens: TokenStore
   /** Path of this script, for the terminal command it prints. */
   cliPath: string
+  /** Replaced in tests. */
+  saveApiUrl?: (url: string | null) => Promise<string | null>
 }
 
 const USAGE = `Usage:
@@ -52,7 +58,23 @@ export async function runCli(argv: string[], io: CliIo): Promise<number> {
     io.write('Removed the stored Skaile token.\n')
     return 0
   }
-  io.write(`${USAGE}\n\nIn a terminal: node "${io.cliPath}" connect   (reads the token from stdin)\n`)
+  if (mode === 'set-api-url') {
+    const target = argv[1]
+    if (!target) {
+      io.write('Usage: set-api-url <https://your-skaile-api> | --clear\n')
+      return 1
+    }
+    const saved = await (io.saveApiUrl ?? saveApiUrl)(target === '--clear' ? null : target)
+    io.write(
+      saved
+        ? `Saved ${saved} as the Skaile API. The token goes to this host. Restart Claude Code to use it.\n`
+        : 'Removed the saved Skaile API URL; the plugin uses https://platform-api.skaile.ai again after a restart.\n',
+    )
+    return 0
+  }
+  io.write(
+    `${USAGE}\n\nIn a terminal:\n  node "${io.cliPath}" connect                 read the token from stdin\n  node "${io.cliPath}" set-api-url <url>       trust a self-hosted Skaile API (--clear to undo)\n`,
+  )
   return mode === undefined || mode === 'help' || mode === '--help' ? 0 : 1
 }
 

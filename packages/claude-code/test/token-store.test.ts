@@ -2,7 +2,8 @@ import { mkdtemp, readFile, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { configDir, createTokenStore, isValidToken, type Runner } from '../src/token-store.js'
+import { configDir } from '../src/paths.js'
+import { createTokenStore, isValidToken, type Runner } from '../src/token-store.js'
 import { TOKEN } from './helpers.js'
 
 type Call = { command: string; args: string[]; input: string }
@@ -49,7 +50,7 @@ describe('token store', () => {
     'stores in the %s keychain through stdin, never as an argument',
     async (platform) => {
       const keychain = fakeKeychain()
-      const store = createTokenStore({ platform, home: await home(), env: {}, run: keychain.run })
+      const store = createTokenStore({ platform, home: await home(), run: keychain.run })
       expect(await store.write(TOKEN)).toMatchObject({ location: 'keychain' })
       expect(await store.read()).toBe(TOKEN)
       for (const call of keychain.calls) {
@@ -63,7 +64,7 @@ describe('token store', () => {
 
   it('falls back to a 0600 file under ~/.config/skaile when no keychain works', async () => {
     const dir = await home()
-    const store = createTokenStore({ platform: 'linux', home: dir, env: {}, run: fakeKeychain({ broken: true }).run })
+    const store = createTokenStore({ platform: 'linux', home: dir, run: fakeKeychain({ broken: true }).run })
     const stored = await store.write(TOKEN)
     const file = join(dir, '.config', 'skaile', 'token')
     expect(stored).toEqual({ location: 'file', detail: file })
@@ -77,23 +78,23 @@ describe('token store', () => {
 
   it('uses the file on platforms without a supported keychain', async () => {
     const keychain = fakeKeychain()
-    const store = createTokenStore({ platform: 'win32', home: await home(), env: {}, run: keychain.run })
+    const store = createTokenStore({ platform: 'win32', home: await home(), run: keychain.run })
     expect(await store.write(TOKEN)).toMatchObject({ location: 'file' })
     expect(keychain.calls).toHaveLength(0)
   })
 
   it('removes a stale file copy once the keychain holds the token', async () => {
     const dir = await home()
-    const broken = createTokenStore({ platform: 'darwin', home: dir, env: {}, run: fakeKeychain({ broken: true }).run })
+    const broken = createTokenStore({ platform: 'darwin', home: dir, run: fakeKeychain({ broken: true }).run })
     await broken.write(TOKEN)
-    const working = createTokenStore({ platform: 'darwin', home: dir, env: {}, run: fakeKeychain().run })
+    const working = createTokenStore({ platform: 'darwin', home: dir, run: fakeKeychain().run })
     await working.write(TOKEN)
     await expect(stat(join(dir, '.config', 'skaile', 'token'))).rejects.toThrow()
   })
 
   it('refuses anything that is not a remote-agent token, and ignores a corrupt file', async () => {
     const dir = await home()
-    const store = createTokenStore({ platform: 'win32', home: dir, env: {} })
+    const store = createTokenStore({ platform: 'win32', home: dir })
     await expect(store.write('skr_short')).rejects.toThrow(/starts with skr_/)
     await expect(store.write(`skr_${'a'.repeat(30)} -w evil`)).rejects.toThrow()
     await store.write(TOKEN)
@@ -103,10 +104,25 @@ describe('token store', () => {
     expect(isValidToken(`Bearer ${TOKEN}`)).toBe(false)
   })
 
-  it('keeps the file under the home directory, honouring an absolute XDG_CONFIG_HOME only', () => {
-    expect(configDir({}, '/home/u')).toBe('/home/u/.config/skaile')
-    expect(configDir({ XDG_CONFIG_HOME: '/xdg' }, '/home/u')).toBe('/xdg/skaile')
-    // A relative XDG_CONFIG_HOME would resolve inside the project directory.
-    expect(configDir({ XDG_CONFIG_HOME: 'conf' }, '/home/u')).toBe('/home/u/.config/skaile')
+  it('keeps the file under the home directory and ignores XDG_CONFIG_HOME and HOME', () => {
+    expect(configDir('/home/u')).toBe('/home/u/.config/skaile')
+    const before = { xdg: process.env.XDG_CONFIG_HOME, home: process.env.HOME }
+    process.env.XDG_CONFIG_HOME = process.cwd()
+    process.env.HOME = process.cwd()
+    try {
+      // A project's settings could set these; the directory still comes from the account database.
+      expect(configDir().startsWith(process.cwd())).toBe(false)
+    } finally {
+      for (const [key, value] of [
+        ['XDG_CONFIG_HOME', before.xdg],
+        ['HOME', before.home],
+      ] as const) {
+        if (value === undefined) {
+          delete process.env[key]
+        } else {
+          process.env[key] = value
+        }
+      }
+    }
   })
 })

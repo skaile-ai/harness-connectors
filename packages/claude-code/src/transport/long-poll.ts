@@ -10,6 +10,9 @@ const MAX_BATCH_FRAMES = 100
 /** A `GET` waits up to 25 s on the server; give the network some slack on top. */
 const GET_TIMEOUT_MS = HARNESS_CHANNEL_POLL_WAIT_MS + 10_000
 const POST_TIMEOUT_MS = 30_000
+/** The server answers a `GET` with at most ~1 MiB of frames (plus one oversize frame); anything far larger is not it. */
+const MAX_GET_BYTES = 4 * 1024 * 1024
+const MAX_OPEN_BYTES = 64 * 1024
 /** Failed `GET`s in a row before the connection counts as lost. Under the server's 60 s idle drop. */
 const MAX_GET_FAILURES = 3
 
@@ -36,7 +39,7 @@ export const openLongPoll: OpenTransport = async ({ apiUrl, token, firstFrame, e
   } catch (error) {
     throw new OpenError('unreachable', (error as Error).message)
   }
-  const body = await response.text().catch(() => '')
+  const body = (await readCapped(response, MAX_OPEN_BYTES).catch(() => '')) ?? ''
   if (!response.ok) {
     throw refusalFromResponse(response.status, body)
   }
@@ -138,7 +141,12 @@ class LongPollTransport implements Transport {
           signal: AbortSignal.any([this.getAbort.signal, AbortSignal.timeout(GET_TIMEOUT_MS)]),
         })
         status = response.status
-        text = await response.text()
+        const capped = await readCapped(response, MAX_GET_BYTES)
+        if (capped === null) {
+          this.end(CLOSE_CONNECTION_LOST, 'connection_lost')
+          return
+        }
+        text = capped
       } catch {
         status = 0
       }
@@ -202,4 +210,27 @@ class LongPollTransport implements Transport {
     this.getAbort.abort()
     this.events.onClose(code, reason)
   }
+}
+
+/** The response body as text, or null when it is larger than `maxBytes` (the read stops there). */
+async function readCapped(response: Response, maxBytes: number): Promise<string | null> {
+  const reader = response.body?.getReader()
+  if (!reader) {
+    return ''
+  }
+  const chunks: Uint8Array[] = []
+  let total = 0
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) {
+      break
+    }
+    total += value.byteLength
+    if (total > maxBytes) {
+      await reader.cancel().catch(() => undefined)
+      return null
+    }
+    chunks.push(value)
+  }
+  return Buffer.concat(chunks).toString('utf8')
 }

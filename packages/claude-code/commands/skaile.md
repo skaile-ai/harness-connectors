@@ -2,7 +2,7 @@
 
 description: Connect Claude Code to Skaile, or show and manage the connection
 argument-hint: connect <token> | status | reconnect | disconnect
-allowed-tools: Bash(printf:_), Bash(node:_)
+allowed-tools: Bash(printf:*), Bash(node "${CLAUDE_PLUGIN_ROOT}/dist/cli.cjs" command)
 disable-model-invocation: true
 ---
 
