@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, stat } from 'node:fs/promises'
+import { mkdtemp, readFile, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -34,6 +34,12 @@ describe('config', () => {
     expect(() => loadConfig({ SKAILE_API_URL: 'https://evil.example' }, 'https://skaile.corp.example')).toThrow()
   })
 
+  it('takes an origin only: a path on a trusted host is refused', () => {
+    expect(() => loadConfig({ SKAILE_API_URL: 'https://platform-api.skaile.ai/other/route' })).toThrow(/origin only/)
+    expect(() => loadConfig({ SKAILE_API_URL: 'http://localhost:3000/x' })).toThrow(/origin only/)
+    expect(() => loadConfig({}, 'https://skaile.corp.example/api')).toThrow(/origin only/)
+  })
+
   it('refuses plain http to anything but localhost, credentials in the URL, and unknown transports', () => {
     expect(() => loadConfig({ SKAILE_API_URL: 'http://platform-api.skaile.ai' })).toThrow(/https/)
     expect(() => loadConfig({ SKAILE_API_URL: 'ftp://x' })).toThrow()
@@ -52,5 +58,8 @@ describe('config', () => {
     await expect(saveApiUrl('http://plain.example', home)).rejects.toThrow(/https/)
     await saveApiUrl(null, home)
     expect(await readSavedApiUrl(home)).toBeNull()
+    // A saved value that is no longer valid (an older one with a path) is an error, not the default host.
+    await writeFile(file, 'https://skaile.corp.example/api\n')
+    await expect(readSavedApiUrl(home)).rejects.toThrow(/not valid[\s\S]*origin only/)
   })
 })

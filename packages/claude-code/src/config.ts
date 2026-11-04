@@ -8,7 +8,7 @@ export const DEFAULT_API_URL = 'https://platform-api.skaile.ai'
 export type TransportMode = 'auto' | 'websocket' | 'long-poll'
 
 export type Config = {
-  /** Skaile API origin, e.g. `https://platform-api.skaile.ai`, without a trailing slash. */
+  /** Skaile API origin, e.g. `https://platform-api.skaile.ai`: no path, no trailing slash. */
   apiUrl: string
   /** `auto` tries the WebSocket first and falls back to long-poll when it cannot be reached. */
   transport: TransportMode
@@ -36,7 +36,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, savedApiUrl: st
   return { apiUrl, transport }
 }
 
-/** An http(s) origin plus path, without a trailing slash. Throws on anything else. */
+/**
+ * An http(s) origin, nothing more: the plugin appends `/harness/...` itself, so a path would only
+ * let an override point the token at another route on a trusted host. Throws on anything else.
+ */
 export function normalizeApiUrl(raw: string): string {
   let url: URL
   try {
@@ -54,7 +57,12 @@ export function normalizeApiUrl(raw: string): string {
   if (url.username || url.password || url.search || url.hash) {
     throw new Error('The Skaile API URL must not carry credentials, a query or a fragment')
   }
-  return url.origin + url.pathname.replace(/\/+$/, '')
+  if (url.pathname !== '/') {
+    throw new Error(
+      `The Skaile API URL must be an origin only (like https://platform-api.skaile.ai), without the path ${url.pathname}`,
+    )
+  }
+  return url.origin
 }
 
 function isTrustedHost(url: URL): boolean {
@@ -74,12 +82,26 @@ function apiUrlFile(home: string): string {
   return join(configDir(home), 'api-url')
 }
 
-/** The API URL the user saved with `set-api-url`, or null. */
+/**
+ * The API URL the user saved with `set-api-url`, or null when none is saved. A saved value that
+ * is no longer valid throws, rather than falling back to the default host with that user's token.
+ */
 export async function readSavedApiUrl(home: string = realHome()): Promise<string | null> {
+  let raw: string
   try {
-    return normalizeApiUrl((await readFile(apiUrlFile(home), 'utf8')).trim())
-  } catch {
-    return null
+    raw = await readFile(apiUrlFile(home), 'utf8')
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return null
+    }
+    throw new Error(`Cannot read the saved Skaile API URL (${apiUrlFile(home)}): ${(error as Error).message}`)
+  }
+  try {
+    return normalizeApiUrl(raw.trim())
+  } catch (error) {
+    throw new Error(
+      `The saved Skaile API URL in ${apiUrlFile(home)} is not valid: ${(error as Error).message}. Save it again in a terminal with set-api-url, or remove it with set-api-url --clear.`,
+    )
   }
 }
 

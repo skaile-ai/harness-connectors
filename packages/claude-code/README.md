@@ -18,6 +18,11 @@ sessions it can reach.
    Linux through `secret-tool`). Where no keychain works, it goes to `~/.config/skaile/token`
    with mode 0600. It is never stored in the project directory.
 
+   On macOS the plugin stores the token with the `security` tool, so the keychain item lets
+   `security` read it without asking. Any process running as you can therefore read the token,
+   which in practice protects it about as well as the 0600 file. The plugin does not use a
+   native keychain library (so it has no native build), and this is the cost.
+
    `/skaile connect <token>` puts the token into the conversation (and so into the transcript
    and the model request). To keep it out, run `/skaile connect` without a token: it prints a
    terminal command that reads the token from stdin. Then run `/skaile reconnect`.
@@ -65,7 +70,7 @@ connection that has been silent for 90 seconds.
 
 | Variable           | Default                          |                                                                                                                      |
 | ------------------ | -------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `SKAILE_API_URL`   | `https://platform-api.skaile.ai` | The Skaile API. `http://` is allowed for localhost only.                                                             |
+| `SKAILE_API_URL`   | `https://platform-api.skaile.ai` | The Skaile API, origin only (no path). `http://` is allowed for localhost only.                                      |
 | `SKAILE_TRANSPORT` | `auto`                           | `auto` uses the WebSocket and falls back to long-poll when a proxy blocks it; `websocket` or `long-poll` forces one. |
 
 ## Not yet
