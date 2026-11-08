@@ -4,11 +4,13 @@ import { isValidToken, type TokenStore } from './token-store.js'
 /**
  * The plugin's small CLI.
  *
- * - `cli.cjs command` is what `/skaile` runs: it reads the command's arguments from stdin (so
- *   the token is not a process argument of node; Claude Code's own `bash -c` for the command
- *   line still carries it briefly) and prints what the model should do next.
- * - `cli.cjs connect` is the terminal path: it reads the token from stdin (hidden when typed),
- *   so the token never enters the Claude Code conversation.
+ * - `cli.cjs command <args>` is what `/skaile` runs, with the command's arguments as argv. It
+ *   prints what the model should do next, and it never stores or replaces a token: the
+ *   command's `allowed-tools` stay in force for the model's whole turn, so a prompt-injected
+ *   model could run it too, with arguments of its choosing. A token typed after `/skaile connect`
+ *   gets the terminal command instead, and is not stored.
+ * - `cli.cjs connect` is the terminal path, and the only way to store a token: it reads the
+ *   token from stdin (hidden when typed), so the token never enters the Claude Code conversation.
  * - `cli.cjs disconnect` removes the stored token.
  * - `cli.cjs set-api-url <url>|--clear` trusts a Skaile API host other than skaile.ai (a
  *   self-hosted Skaile). Terminal only, so neither a project's settings nor the model can set it.
@@ -30,8 +32,7 @@ export type CliIo = {
 }
 
 const USAGE = `Usage:
-  /skaile connect <token>   store a Skaile remote-agent token (skr_…) and connect
-  /skaile connect           show the terminal command that keeps the token out of this chat
+  /skaile connect           show the terminal command that stores a Skaile remote-agent token
   /skaile status            show whether Claude Code is connected, the agent and the linked sessions
   /skaile reconnect         reconnect (takes the connection over from another Claude Code session)
   /skaile disconnect        remove the stored token and disconnect`
@@ -39,8 +40,7 @@ const USAGE = `Usage:
 export async function runCli(argv: string[], io: CliIo): Promise<number> {
   const [mode] = argv
   if (mode === 'command') {
-    const words = (await io.readStdin()).trim().split(/\s+/).filter(Boolean)
-    return slashCommand(words, io)
+    return slashCommand(argv.slice(1).filter(Boolean), io)
   }
   if (mode === 'connect') {
     const typed = io.readSecretLine?.('Paste your Skaile remote-agent token (input hidden): ')
@@ -82,24 +82,16 @@ async function slashCommand(words: string[], io: CliIo): Promise<number> {
   const [sub, ...rest] = words
   switch (sub) {
     case 'connect': {
-      const token = rest[0]
-      if (!token) {
-        io.write(
-          `To keep the token out of this conversation, the user runs this in a terminal and pastes the token when asked:\n\n  node "${io.cliPath}" connect\n\nThen /skaile reconnect here. Tell the user exactly that, and show the command.\n`,
-        )
+      const terminal = `the user runs this in a terminal and pastes the token when asked:\n\n  node "${io.cliPath}" connect\n\nThen /skaile reconnect here.`
+      if (rest.length === 0) {
+        io.write(`To store a Skaile token, ${terminal} Tell the user exactly that, and show the command.\n`)
         return 0
       }
-      if (rest.length > 1 || !isValidToken(token)) {
-        io.write(
-          'That is not a Skaile remote-agent token (it starts with skr_). Nothing was stored. Tell the user, without repeating what they typed.\n',
-        )
-        return 1
-      }
-      const stored = await io.tokens.write(token)
+      // Never stored from here, whatever it is (see the header): the terminal is the only path.
       io.write(
-        `Stored the Skaile token in ${stored.detail}. NEXT: call the skaile_reconnect tool now and show the user its result. Never repeat the token.\n`,
+        `Nothing was stored: /skaile does not take a token. To store one, ${terminal} Tell the user exactly that and show the command, without repeating what they typed after connect. If it was a real token, it is now in this conversation; they can create a new one in Skaile.\n`,
       )
-      return 0
+      return 1
     }
     case 'status':
     case undefined:

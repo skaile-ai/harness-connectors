@@ -55,7 +55,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'skaile_reconnect',
     description:
-      'Reconnect to Skaile with the stored token. Use when the user runs /skaile reconnect or /skaile connect: it takes the connection over from another Claude Code session.',
+      'Reconnect to Skaile with the stored token. Use when the user runs /skaile reconnect (also after storing a token): it takes the connection over from another Claude Code session.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
 ]

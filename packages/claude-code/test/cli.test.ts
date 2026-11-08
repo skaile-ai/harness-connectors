@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { type CliIo, runCli } from '../src/cli.js'
-import { MemoryTokenStore, TOKEN } from './helpers.js'
+import { MemoryTokenStore, OTHER_TOKEN, TOKEN } from './helpers.js'
 
 function io(stdin: string, secretLine?: string) {
   const out: string[] = []
@@ -16,25 +16,52 @@ function io(stdin: string, secretLine?: string) {
 }
 
 describe('the /skaile command', () => {
-  it('connect <token> stores the token, never echoes it, and asks for a reconnect', async () => {
-    const { value, out, tokens } = io(`connect ${TOKEN}`)
-    expect(await runCli(['command'], value)).toBe(0)
-    expect(tokens.token).toBe(TOKEN)
-    expect(out.join('')).toMatch(/NEXT: call the skaile_reconnect tool/)
-    expect(out.join('')).not.toContain('skr_')
-  })
-
-  it('connect with a bad token stores nothing and does not repeat it', async () => {
-    const { value, out, tokens } = io('connect skr_nope')
-    expect(await runCli(['command'], value)).toBe(1)
-    expect(tokens.token).toBeNull()
-    expect(out.join('')).not.toContain('skr_nope')
+  it('connect <token> stores nothing, never echoes it, and gives the terminal command', async () => {
+    for (const args of [
+      ['connect', TOKEN],
+      ['connect', 'skr_nope'],
+      ['connect', TOKEN, 'extra'],
+    ]) {
+      const { value, out, tokens } = io('')
+      expect(await runCli(['command', ...args], value)).toBe(1)
+      expect(tokens.token).toBeNull()
+      expect(out.join('')).toContain('node "/plugin/dist/cli.cjs" connect')
+      expect(out.join('')).toMatch(/Nothing was stored/)
+      expect(out.join('')).not.toContain('skr_')
+    }
   })
 
   it('connect without a token shows the terminal command', async () => {
-    const { value, out } = io('connect')
-    await runCli(['command'], value)
+    const { value, out } = io('')
+    expect(await runCli(['command', 'connect'], value)).toBe(0)
     expect(out.join('')).toContain('node "/plugin/dist/cli.cjs" connect')
+  })
+
+  it('cannot store or replace a token, whatever the model passes, on argv or stdin', async () => {
+    // allowed-tools let a prompt-injected model run `cli.cjs command <anything>` during the turn.
+    const tries = [
+      ['connect', OTHER_TOKEN],
+      [`connect ${OTHER_TOKEN}`],
+      ['set-api-url', 'https://evil.example'],
+      ['status', OTHER_TOKEN],
+      [OTHER_TOKEN],
+      [],
+    ]
+    for (const args of tries) {
+      const { value, tokens } = io(`connect ${OTHER_TOKEN}\n${OTHER_TOKEN}\n`, OTHER_TOKEN)
+      tokens.token = TOKEN
+      value.saveApiUrl = async () => {
+        throw new Error('must not be called')
+      }
+      const writes: string[] = []
+      tokens.write = async (token: string) => {
+        writes.push(token)
+        return { location: 'file' as const, detail: 'memory' }
+      }
+      await runCli(['command', ...args], value)
+      expect(writes, args.join(' ')).toEqual([])
+      expect(tokens.token, args.join(' ')).toBe(TOKEN)
+    }
   })
 
   it('status and reconnect go through the MCP server, not a second connection', async () => {
@@ -43,22 +70,22 @@ describe('the /skaile command', () => {
       ['', 'skaile_status'],
       ['reconnect', 'skaile_reconnect'],
     ]) {
-      const { value, out } = io(sub as string)
-      await runCli(['command'], value)
+      const { value, out } = io('')
+      await runCli(['command', sub as string], value)
       expect(out.join('')).toContain(`NEXT: call the ${tool} tool`)
     }
   })
 
   it('disconnect clears the token', async () => {
-    const { value, tokens } = io('disconnect')
+    const { value, tokens } = io('')
     tokens.token = TOKEN
-    await runCli(['command'], value)
+    await runCli(['command', 'disconnect'], value)
     expect(tokens.token).toBeNull()
   })
 
   it('an unknown subcommand prints the usage', async () => {
-    const { value, out } = io('frobnicate')
-    expect(await runCli(['command'], value)).toBe(1)
+    const { value, out } = io('')
+    expect(await runCli(['command', 'frobnicate'], value)).toBe(1)
     expect(out.join('')).toMatch(/Usage:/)
   })
 })
@@ -99,11 +126,11 @@ describe('set-api-url', () => {
   })
 
   it('is not reachable from the /skaile command', async () => {
-    const { value, out } = io('set-api-url https://evil.example')
+    const { value, out } = io('')
     value.saveApiUrl = async () => {
       throw new Error('must not be called')
     }
-    expect(await runCli(['command'], value)).toBe(1)
+    expect(await runCli(['command', 'set-api-url', 'https://evil.example'], value)).toBe(1)
     expect(out.join('')).toMatch(/Unknown \/skaile command/)
   })
 })

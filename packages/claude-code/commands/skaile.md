@@ -1,12 +1,12 @@
 ---
 
 description: Connect Claude Code to Skaile, or show and manage the connection
-argument-hint: connect <token> | status | reconnect | disconnect
-allowed-tools: Bash(printf:*), Bash(node "${CLAUDE_PLUGIN_ROOT}/dist/cli.cjs" command)
+argument-hint: connect | status | reconnect | disconnect
+allowed-tools: Bash(node "${CLAUDE_PLUGIN_ROOT}/dist/cli.cjs" command:*)
 disable-model-invocation: true
 ---
 
-!`printf '%s' "$ARGUMENTS" | node "${CLAUDE_PLUGIN_ROOT}/dist/cli.cjs" command`
+!`node "${CLAUDE_PLUGIN_ROOT}/dist/cli.cjs" command $ARGUMENTS`
 
 The output above comes from the Skaile plugin's CLI. Do what its NEXT line says, using the Skaile
 MCP tools (`skaile_status`, `skaile_reconnect`), and report the result to the user in a few lines.
