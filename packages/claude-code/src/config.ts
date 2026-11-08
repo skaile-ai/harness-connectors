@@ -16,17 +16,22 @@ export type Config = {
 
 /**
  * Reads the configuration. `SKAILE_API_URL` picks the server and `SKAILE_TRANSPORT` forces one
- * transport. The token goes to the API host on every connect, so the environment alone may name
- * only a Skaile host (`skaile.ai` and its subdomains) or localhost: a project's settings can set
- * environment variables, and must not be able to send the token elsewhere. Any other host (a
- * self-hosted Skaile) must first be saved by the user in a terminal (`cli.cjs set-api-url`);
- * `savedApiUrl` is that value, and the environment may then name it too.
+ * transport. The token goes to the API host on every connect, and a project's settings can set
+ * environment variables, so the environment alone may name only one of Skaile's own API hosts
+ * (`TRUSTED_API_HOSTS`, https). Any other host, localhost included, must first be saved by the
+ * user in a terminal (`cli.cjs set-api-url`); `savedApiUrl` is that value, and the environment
+ * may then name it too.
+ *
+ * This guards the API URL only. A project's settings can still set other variables the plugin's
+ * `node` process obeys (`NODE_OPTIONS`, `NODE_EXTRA_CA_CERTS`, `PATH`), and through them load code
+ * or trust a proxy that reads the token. Open only projects you trust while the plugin holds a
+ * token (see the README).
  */
 export function loadConfig(env: NodeJS.ProcessEnv = process.env, savedApiUrl: string | null = null): Config {
   const apiUrl = normalizeApiUrl(env.SKAILE_API_URL?.trim() || savedApiUrl || DEFAULT_API_URL)
   if (!isTrustedHost(new URL(apiUrl)) && apiUrl !== (savedApiUrl && normalizeApiUrl(savedApiUrl))) {
     throw new Error(
-      `SKAILE_API_URL points at ${new URL(apiUrl).host}, which is not a Skaile host. To use it, save it in a terminal: node "<plugin>/dist/cli.cjs" set-api-url ${apiUrl}`,
+      `SKAILE_API_URL points at ${new URL(apiUrl).host}, which is not a Skaile API host. To use it, save it in a terminal: node "<plugin>/dist/cli.cjs" set-api-url ${apiUrl}`,
     )
   }
   const transport = env.SKAILE_TRANSPORT?.trim() || 'auto'
@@ -65,11 +70,12 @@ export function normalizeApiUrl(raw: string): string {
   return url.origin
 }
 
+/** Skaile's own API hosts: the only ones the environment may name without a saved URL. */
+export const TRUSTED_API_HOSTS: readonly string[] = ['platform-api.skaile.ai', 'staging-platform-api.skaile.ai']
+
 function isTrustedHost(url: URL): boolean {
-  if (isLoopback(url.hostname)) {
-    return true
-  }
-  return url.protocol === 'https:' && (url.hostname === 'skaile.ai' || url.hostname.endsWith('.skaile.ai'))
+  // `url.host` keeps a non-default port, so `platform-api.skaile.ai:8443` is not trusted either.
+  return url.protocol === 'https:' && TRUSTED_API_HOSTS.includes(url.host)
 }
 
 function isLoopback(hostname: string): boolean {
