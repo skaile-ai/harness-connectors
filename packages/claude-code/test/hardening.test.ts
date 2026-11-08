@@ -3,16 +3,19 @@ import { readFile } from 'node:fs/promises'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import type { HarnessChannelFrame } from '@skaile/harness-protocol'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   ASK_TIMEOUT_MS,
   ASK_WAKE_ALLOWANCE_MS,
   MAX_RETRY_AFTER_MS,
   SERVER_ASK_TIMEOUT_MS,
   SkaileClient,
+  UNAUTHORIZED_GIVE_UP_MS,
 } from '../src/client.js'
+import { isSupportedNodeVersion, MIN_NODE_VERSION } from '../src/node-version.js'
 import { describePeer } from '../src/peers.js'
 import { openLongPoll } from '../src/transport/long-poll.js'
+import { splitPollBatch } from '../src/transport/poll-batch.js'
 import { OpenError, type OpenTransport, type TransportEvents } from '../src/transport/types.js'
 import { openWebSocket } from '../src/transport/websocket.js'
 import { FakeServer } from './fake-server.js'
@@ -173,7 +176,7 @@ describe('the token never follows a redirect', () => {
   })
 
   it('long-poll drops a connection whose GET answer is far larger than the server ever sends', async () => {
-    const huge = `{"frames":[],"cursor":"c.0","pad":"${'x'.repeat(5 * 1024 * 1024)}"}`
+    const huge = `{"frames":[],"cursor":"c.0","pad":"${'x'.repeat(17 * 1024 * 1024)}"}`
     const origin = await listen((req, res) => {
       if (req.method === 'POST') {
         res.writeHead(200).end(JSON.stringify({ connectionId: 'c', cursor: 'c.0' }))
@@ -210,7 +213,277 @@ describe('what the model sees', () => {
     expect(command).toContain('\ndisable-model-invocation: true\n')
     expect(command).toContain(
       // biome-ignore lint/suspicious/noTemplateCurlyInString: Claude Code's own placeholder, not a JS template.
-      '\nallowed-tools: Bash(printf:*), Bash(node "${CLAUDE_PLUGIN_ROOT}/dist/cli.cjs" command)\n',
+      '\nallowed-tools: Bash(node "${CLAUDE_PLUGIN_ROOT}/dist/cli.cjs" command:*)\n',
     )
+    // No printf (or any other tool) that could pipe a token into the CLI.
+    expect(command).not.toContain('printf')
+    expect(command).not.toMatch(/connect <token>/)
+  })
+})
+
+/** Opens a long-poll connection against `origin`; resolves with the close it reports. */
+function openPoll(url: string, frames: string[] = []) {
+  let transport: Awaited<ReturnType<OpenTransport>> | null = null
+  const started = Date.now()
+  const closed = new Promise<{ code: number; reason: string; afterMs: number }>((resolve) => {
+    void openLongPoll({
+      apiUrl: url,
+      token: TOKEN,
+      firstFrame: { type: 'ping', id: 'p' },
+      events: {
+        onFrame: (raw) => frames.push(raw),
+        onClose: (code, reason) => resolve({ code, reason, afterMs: Date.now() - started }),
+      },
+    }).then((t) => {
+      transport = t
+    })
+  })
+  return { closed, frames, transport: () => transport }
+}
+
+function cursorOf(url: string | undefined): string | null {
+  return new URL(url ?? '/', 'http://x').searchParams.get('cursor')
+}
+
+describe('long-poll edge cases', () => {
+  it('repeats the cursor after a lost GET answer, and gets the frames once', async () => {
+    const cursors: (string | null)[] = []
+    const origin = await listen((req, res) => {
+      if (req.method === 'POST') {
+        res.writeHead(200).end(JSON.stringify({ connectionId: 'c', cursor: 'c.0' }))
+        return
+      }
+      cursors.push(cursorOf(req.url))
+      if (cursors.length === 1) {
+        // The answer is lost on the way back.
+        req.socket.destroy()
+        return
+      }
+      if (cursorOf(req.url) === 'c.0') {
+        res.writeHead(200).end('{"frames":[{"type":"ping","id":"s1"}],"cursor":"c.1"}')
+        return
+      }
+      res.writeHead(200).end('{"frames":[],"cursor":"c.1","closed":{"code":1000,"reason":"done"}}')
+    })
+    const poll = openPoll(origin.url)
+    expect(await poll.closed).toMatchObject({ code: 1000, reason: 'done' })
+    expect(cursors).toEqual(['c.0', 'c.0', 'c.1'])
+    expect(poll.frames).toEqual(['{"type":"ping","id":"s1"}'])
+  })
+
+  it('refuses a redirect on a later GET, and the redirect target sees nothing', async () => {
+    const target = await listen((_req, res) => res.writeHead(200).end('{"frames":[],"cursor":"c.9"}'))
+    const origin = await listen((req, res) => {
+      if (req.method === 'POST') {
+        res.writeHead(200).end(JSON.stringify({ connectionId: 'c', cursor: 'c.0' }))
+        return
+      }
+      res.writeHead(307, { Location: `${target.url}/harness/poll?cursor=c.0` }).end()
+    })
+    const poll = openPoll(origin.url)
+    expect(await poll.closed).toMatchObject({ reason: 'connection_lost' })
+    expect(target.hits).toHaveLength(0)
+  }, 10_000)
+
+  it('refuses a redirect on a later POST, and the redirect target sees nothing', async () => {
+    const target = await listen((_req, res) => res.writeHead(200).end('{}'))
+    const origin = await listen((req, res) => {
+      if (req.method === 'POST' && !req.url?.includes('connection=')) {
+        res.writeHead(200).end(JSON.stringify({ connectionId: 'c', cursor: 'c.0' }))
+        return
+      }
+      if (req.method === 'POST') {
+        res.writeHead(307, { Location: `${target.url}/harness/poll?connection=c` }).end()
+        return
+      }
+      // The GET waits, as on a quiet connection.
+    })
+    const poll = openPoll(origin.url)
+    await vi.waitFor(() => expect(poll.transport()).not.toBeNull())
+    poll.transport()?.send({ type: 'ping', id: 'c1' })
+    expect(await poll.closed).toMatchObject({ reason: 'connection_lost' })
+    expect(target.hits).toHaveLength(0)
+  })
+
+  it('a POST 404 ends the connection at once, with the close code the next GET carries', async () => {
+    let gets = 0
+    const origin = await listen((req, res) => {
+      if (req.method === 'POST' && !req.url?.includes('connection=')) {
+        res.writeHead(200).end(JSON.stringify({ connectionId: 'c', cursor: 'c.0' }))
+        return
+      }
+      if (req.method === 'POST') {
+        res.writeHead(404).end()
+        return
+      }
+      gets += 1
+      if (gets === 1) {
+        return // waits, as on a quiet connection; the client must not sit on it
+      }
+      res.writeHead(200).end('{"frames":[],"cursor":"c.0","closed":{"code":4409,"reason":"replaced"}}')
+    })
+    const poll = openPoll(origin.url)
+    await vi.waitFor(() => expect(poll.transport()).not.toBeNull())
+    poll.transport()?.send({ type: 'ping', id: 'c1' })
+    const closed = await poll.closed
+    expect(closed).toMatchObject({ code: 4409, reason: 'replaced' })
+    expect(closed.afterMs).toBeLessThan(3_000)
+  })
+
+  it('a POST 404 ends the connection at once when the connection is gone for the GET too', async () => {
+    let gets = 0
+    const origin = await listen((req, res) => {
+      if (req.method === 'POST' && !req.url?.includes('connection=')) {
+        res.writeHead(200).end(JSON.stringify({ connectionId: 'c', cursor: 'c.0' }))
+        return
+      }
+      if (req.method === 'POST') {
+        res.writeHead(404).end()
+        return
+      }
+      gets += 1
+      if (gets > 1) {
+        res.writeHead(404).end()
+      }
+    })
+    const poll = openPoll(origin.url)
+    await vi.waitFor(() => expect(poll.transport()).not.toBeNull())
+    poll.transport()?.send({ type: 'ping', id: 'c1' })
+    const closed = await poll.closed
+    expect(closed).toMatchObject({ reason: 'connection_lost' })
+    expect(closed.afterMs).toBeLessThan(3_000)
+  })
+
+  it('a waiting request fails at once when its POST gets 404', async () => {
+    const server = await new FakeServer({ agents: { [TOKEN]: { agentId: 'ra_1' } }, pollWaitMs: 60_000 }).start()
+    try {
+      const client = new SkaileClient({
+        config: { apiUrl: server.url, transport: 'long-poll' },
+        tokens: new MemoryTokenStore(TOKEN),
+        requestTimeoutMs: 20_000,
+        backoffBaseMs: 20,
+        backoffMaxMs: 50,
+      })
+      clients.push(client)
+      await client.ensureConnected()
+      // The server forgets the connection: its POST and GET answer 404.
+      ;(server as unknown as { polls: Map<string, unknown> }).polls.clear()
+      const started = Date.now()
+      await expect(client.listPeers()).rejects.toMatchObject({ code: 'peer_offline' })
+      expect(Date.now() - started).toBeLessThan(5_000)
+    } finally {
+      await server.stop()
+    }
+  })
+
+  it('hands each frame on raw, so its size is checked before it is decoded', () => {
+    const big = `{"type":"send","id":"s","text":"${'x'.repeat(300_000)}"}`
+    const tricky = '{"type":"ping","id":"a]},{\\"b\\"[","x":[1,{"y":"}"}]}'
+    const batch = splitPollBatch(` {"frames": [${big}, ${tricky} ,null], "cursor":"c.3", "closed":{"code":4409}} `)
+    expect(batch?.frames).toEqual([big, tricky, 'null'])
+    expect(batch?.cursor).toBe('c.3')
+    expect(batch?.closed).toEqual({ code: 4409 })
+    expect(splitPollBatch('{"frames":[],"cursor":"c.0"}')).toEqual({ frames: [], cursor: 'c.0', closed: undefined })
+    for (const bad of [
+      '',
+      '[]',
+      '{"frames":[1,}',
+      '{"frames":"x"}',
+      '{"frames":[{"a":"b]}',
+      '{"cursor":"c"} x',
+      '{"a" 1}',
+    ]) {
+      expect(splitPollBatch(bad), bad).toSatisfy(
+        (b: ReturnType<typeof splitPollBatch>) => b === null || b.frames === null,
+      )
+    }
+  })
+})
+
+describe.each(['websocket', 'long-poll'] as const)('an oversize server frame over %s', (transport) => {
+  it('gets payload_too_large and the connection stays open, also above 1 MiB', async () => {
+    const server = await new FakeServer({ agents: { [TOKEN]: { agentId: 'ra_1' } } }).start()
+    try {
+      const client = new SkaileClient({
+        config: { apiUrl: server.url, transport },
+        tokens: new MemoryTokenStore(TOKEN),
+        backoffBaseMs: 20,
+        backoffMaxMs: 50,
+      })
+      clients.push(client)
+      await client.ensureConnected()
+      const live = server.live('ra_1')
+      for (const size of [300_000, 2 * 1024 * 1024]) {
+        live?.send({
+          type: 'send',
+          id: `big-${size}`,
+          exchangeId: 'x',
+          sessionId: 's1',
+          text: 'x'.repeat(size),
+        } as never)
+      }
+      await server.until(
+        () => (live?.received.filter((f) => f.type === 'error' && f.code === 'payload_too_large').length ?? 0) === 2,
+        5_000,
+      )
+      expect(live?.closed).toBeNull()
+      expect(client.getStatus()).toMatchObject({ state: 'connected', transport })
+      expect(server.connections).toHaveLength(1)
+    } finally {
+      await server.stop()
+    }
+  })
+})
+
+describe('the unauthorized refusal clock (fake clock)', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  const refused = () => new OpenError('refused', 'refused with HTTP 401 unauthorized', 401, 'unauthorized')
+
+  it('stops only once the token has been refused without a break for the give-up time', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] })
+    const client = stubClient(async () => {
+      throw refused()
+    })
+    client.start()
+    await vi.advanceTimersByTimeAsync(UNAUTHORIZED_GIVE_UP_MS - 1_000)
+    expect(client.getStatus().state).toBe('retrying')
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(client.getStatus()).toMatchObject({ state: 'stopped', reason: 'unauthorized' })
+  })
+
+  it('starts the clock again after a failure that is not a 401', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] })
+    const start = Date.now()
+    let broke = false
+    const client = stubClient(async () => {
+      if (!broke && Date.now() - start >= 4 * 60_000) {
+        broke = true
+        throw new OpenError('unreachable', 'connect ECONNREFUSED')
+      }
+      throw refused()
+    })
+    client.start()
+    // Five minutes after the first refusal: the network failure at minute four broke the run.
+    await vi.advanceTimersByTimeAsync(UNAUTHORIZED_GIVE_UP_MS + 1_000)
+    expect(broke).toBe(true)
+    expect(client.getStatus().state).toBe('retrying')
+    // Five minutes after the run that began at minute four, it stops.
+    await vi.advanceTimersByTimeAsync(4 * 60_000)
+    expect(client.getStatus()).toMatchObject({ state: 'stopped', reason: 'unauthorized' })
+  })
+})
+
+describe('the Node version check', () => {
+  it('accepts Node 20.3 and newer, and refuses older ones', () => {
+    expect(MIN_NODE_VERSION).toBe('20.3.0')
+    for (const ok of ['v20.3.0', 'v20.10.1', 'v22.0.0', 'v24.15.0', '100.0.0']) {
+      expect(isSupportedNodeVersion(ok), ok).toBe(true)
+    }
+    for (const old of ['v20.2.9', 'v20.0.0', 'v18.20.4', 'v16.0.0', 'garbage']) {
+      expect(isSupportedNodeVersion(old), old).toBe(false)
+    }
   })
 })

@@ -1,5 +1,13 @@
 import type { HarnessChannelErrorCode, HarnessChannelFrame } from '@skaile/harness-protocol'
 
+/**
+ * The largest server message (a WebSocket message, a long-poll `GET` answer) the client reads.
+ * A frame is at most 256 KiB (`maxFrameBytes`); one between that and this cap is read, refused
+ * with `payload_too_large` and the connection stays open (spec §4, §6). This cap only bounds
+ * memory against a server that is not a Skaile server: above it the connection is dropped.
+ */
+export const MAX_INBOUND_MESSAGE_BYTES = 16 * 1024 * 1024
+
 export type TransportKind = 'websocket' | 'long-poll'
 
 export interface TransportEvents {

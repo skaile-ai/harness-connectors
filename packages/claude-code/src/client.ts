@@ -172,7 +172,7 @@ export class SkaileClient {
 
   /**
    * Resolves once connected, or throws a SkaileError that says why not. A tool call goes through
-   * here: it re-reads the token when not connected, so a token stored by `/skaile connect` is used
+   * here: it re-reads the token when not connected, so a token stored in a terminal (`cli.cjs connect`) is used
    * without restarting the server, and it skips a running backoff (but not a 429's wait).
    */
   async ensureConnected(): Promise<Live> {
@@ -521,7 +521,7 @@ export class SkaileClient {
       this.stop('unauthorized', describeError('unauthorized'), token)
       return
     }
-    this.scheduleRetry('Skaile refused the token; retrying, as the refusal may be temporary')
+    this.scheduleRetry('Skaile refused the token; retrying, as the refusal may be temporary', undefined, true)
   }
 
   private afterError(frame: HarnessChannelErrorFrame, token: string): void {
@@ -578,7 +578,14 @@ export class SkaileClient {
     this.log(`stopped: ${message}`)
   }
 
-  private scheduleRetry(lastError: string, serverRetryAfterMs?: number): void {
+  /**
+   * `unauthorized` keeps the refusal clock running; any other failure (the network, a 429, a
+   * close) breaks the run of refusals, so the clock starts again at the next one.
+   */
+  private scheduleRetry(lastError: string, serverRetryAfterMs?: number, unauthorized = false): void {
+    if (!unauthorized) {
+      this.resetUnauthorized()
+    }
     this.clearRetry()
     if (this.closed) {
       return

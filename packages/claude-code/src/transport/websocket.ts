@@ -1,10 +1,14 @@
 import { HARNESS_CHANNEL_CONNECT_PATH } from '@skaile/harness-protocol'
 import WebSocket from 'ws'
-import { OpenError, type OpenTransport, refusalFromResponse, type Transport } from './types.js'
+import {
+  MAX_INBOUND_MESSAGE_BYTES,
+  OpenError,
+  type OpenTransport,
+  refusalFromResponse,
+  type Transport,
+} from './types.js'
 
 const HANDSHAKE_TIMEOUT_MS = 15_000
-/** Larger than any valid frame, so an oversize one reaches the parser and gets `payload_too_large`. */
-const MAX_MESSAGE_BYTES = 1024 * 1024
 const MAX_REFUSAL_BODY_BYTES = 16 * 1024
 
 export function webSocketUrl(apiUrl: string): string {
@@ -20,7 +24,7 @@ export const openWebSocket: OpenTransport = ({ apiUrl, token, firstFrame, events
     const ws = new WebSocket(webSocketUrl(apiUrl), {
       headers: { Authorization: `Bearer ${token}` },
       handshakeTimeout: HANDSHAKE_TIMEOUT_MS,
-      maxPayload: MAX_MESSAGE_BYTES,
+      maxPayload: MAX_INBOUND_MESSAGE_BYTES,
       followRedirects: false,
     })
     const fail = (error: OpenError) => {
