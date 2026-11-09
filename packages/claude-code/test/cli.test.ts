@@ -38,12 +38,14 @@ describe('the /skaile command', () => {
   })
 
   it('cannot store or replace a token, whatever the model passes, on argv or stdin', async () => {
-    // allowed-tools let a prompt-injected model run `cli.cjs command <anything>` during the turn.
+    // allowed-tools let a prompt-injected model run `cli.cjs command` during the turn, and the
+    // user can approve other arguments.
     const tries = [
       ['connect', OTHER_TOKEN],
       [`connect ${OTHER_TOKEN}`],
       ['set-api-url', 'https://evil.example'],
       ['status', OTHER_TOKEN],
+      ['disconnect'],
       [OTHER_TOKEN],
       [],
     ]
@@ -58,6 +60,9 @@ describe('the /skaile command', () => {
         writes.push(token)
         return { location: 'file' as const, detail: 'memory' }
       }
+      tokens.clear = async () => {
+        writes.push('clear')
+      }
       await runCli(['command', ...args], value)
       expect(writes, args.join(' ')).toEqual([])
       expect(tokens.token, args.join(' ')).toBe(TOKEN)
@@ -67,7 +72,6 @@ describe('the /skaile command', () => {
   it('status and reconnect go through the MCP server, not a second connection', async () => {
     for (const [sub, tool] of [
       ['status', 'skaile_status'],
-      ['', 'skaile_status'],
       ['reconnect', 'skaile_reconnect'],
     ]) {
       const { value, out } = io('')
@@ -76,11 +80,36 @@ describe('the /skaile command', () => {
     }
   })
 
-  it('disconnect clears the token', async () => {
-    const { value, tokens } = io('')
+  it('disconnect keeps the token and gives the terminal command', async () => {
+    const { value, tokens, out } = io('')
     tokens.token = TOKEN
-    await runCli(['command', 'disconnect'], value)
-    expect(tokens.token).toBeNull()
+    expect(await runCli(['command', 'disconnect'], value)).toBe(0)
+    expect(tokens.token).toBe(TOKEN)
+    expect(out.join('')).toContain('node "/plugin/dist/cli.cjs" disconnect')
+  })
+
+  it('without arguments prints the guide for every subcommand, as /skaile runs it', async () => {
+    const { value, out } = io('')
+    expect(await runCli(['command'], value)).toBe(0)
+    const text = out.join('')
+    expect(text).toContain('node "/plugin/dist/cli.cjs" connect')
+    expect(text).toContain('node "/plugin/dist/cli.cjs" disconnect')
+    expect(text).toContain('call the skaile_status tool')
+    expect(text).toContain('call the skaile_reconnect tool')
+    expect(text).toMatch(/Usage:/)
+  })
+
+  it('the slash command passes no arguments to a shell or a process', async () => {
+    const { readFile } = await import('node:fs/promises')
+    const md = await readFile(new URL('../commands/skaile.md', import.meta.url), 'utf8')
+    const shellLines = md.split('\n').filter((line) => line.startsWith('!') || line.startsWith('allowed-tools:'))
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: Claude Code's own placeholder, kept literal
+    const root = '${CLAUDE_PLUGIN_ROOT}'
+    expect(shellLines).toEqual([
+      `allowed-tools: Bash(node "${root}/dist/cli.cjs" command)`,
+      `!\`node "${root}/dist/cli.cjs" command\``,
+    ])
+    expect(md).not.toMatch(/printf/)
   })
 
   it('an unknown subcommand prints the usage', async () => {

@@ -7,7 +7,10 @@ export const MIN_NODE_VERSION = '20.3.0'
 
 /** True when `version` (like `v22.1.0` or `20.3.0`) is at least MIN_NODE_VERSION. */
 export function isSupportedNodeVersion(version: string): boolean {
-  const [major = 0, minor = 0, patch = 0] = version.replace(/^v/, '').split('.').map(Number)
+  const [major = 0, minor = 0, patch = 0] = version
+    .replace(/^v/, '')
+    .split('.')
+    .map((part) => Number.parseInt(part, 10))
   const [minMajor, minMinor, minPatch] = MIN_NODE_VERSION.split('.').map(Number) as [number, number, number]
   if (major !== minMajor) {
     return major > minMajor

@@ -91,7 +91,10 @@ class LongPollTransport implements Transport {
       return
     }
     this.queue.push(frame)
-    void this.flush()
+    if (!this.closeCheck) {
+      // After a 404 the connection is gone: queued frames fail when it ends, nothing more is sent.
+      void this.flush()
+    }
   }
 
   close(): void {
@@ -107,7 +110,7 @@ class LongPollTransport implements Transport {
     }
     this.flushing = true
     try {
-      while (!this.ended && this.queue.length > 0) {
+      while (!this.ended && !this.closeCheck && this.queue.length > 0) {
         const batch = this.queue.splice(0, MAX_BATCH_FRAMES)
         let status: number
         try {
@@ -133,8 +136,11 @@ class LongPollTransport implements Transport {
           // The connection ended and this batch was dropped. Ask once more, now, for its close
           // code (a `replaced` must not turn into a reconnect), then end it either way, so the
           // requests in the batch fail at once instead of timing out.
-          this.closeCheck = true
-          this.currentGet?.abort()
+          if (!this.closeCheck) {
+            // Only the `GET` that was waiting: never the one that fetches the close code.
+            this.closeCheck = true
+            this.currentGet?.abort()
+          }
           return
         }
         if (status !== 200) {

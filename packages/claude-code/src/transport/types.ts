@@ -6,7 +6,7 @@ import type { HarnessChannelErrorCode, HarnessChannelFrame } from '@skaile/harne
  * with `payload_too_large` and the connection stays open (spec §4, §6). This cap only bounds
  * memory against a server that is not a Skaile server: above it the connection is dropped.
  */
-export const MAX_INBOUND_MESSAGE_BYTES = 16 * 1024 * 1024
+export const MAX_INBOUND_MESSAGE_BYTES = 4 * 1024 * 1024
 
 export type TransportKind = 'websocket' | 'long-poll'
 

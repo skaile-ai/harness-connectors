@@ -18,8 +18,10 @@ sessions it can reach.
    Paste the token when it asks (the input is hidden). The token never enters the Claude Code
    conversation, its transcript or a model request, and it is not a process argument.
    `/skaile` does not take a token: anything typed after `/skaile connect` is not stored, and
-   the command shows the terminal path instead. (The model can run the `/skaile` command line
-   during its turn, so a command that stored a token would let a prompt-injected model swap it.)
+   the command shows the terminal path instead. `/skaile` hands what you type to the model only,
+   never to a shell or a process argument. (The model can run the `/skaile` command line during
+   its turn, so a command that stored or removed a token would let a prompt-injected model swap
+   or drop it.)
 
    The token is stored in the OS keychain (macOS Keychain, or the Secret Service keyring on
    Linux through `secret-tool`). Where no keychain works, it goes to `~/.config/skaile/token`
@@ -37,7 +39,7 @@ sessions it can reach.
 | `/skaile connect`    | Show the terminal command that stores a token                             |
 | `/skaile status`     | Connection, agent and linked sessions                                     |
 | `/skaile reconnect`  | Connect again, taking the connection over from another Claude Code window |
-| `/skaile disconnect` | Remove the stored token and disconnect                                    |
+| `/skaile disconnect` | Show the terminal command that removes the stored token                   |
 
 ## Tools
 
@@ -95,7 +97,7 @@ keep a project from running code in the plugin's `node` process: project setting
 `NODE_OPTIONS` (load a script), `NODE_EXTRA_CA_CERTS` (trust a proxy that reads the TLS
 traffic) or `PATH` (run another `node`), and each of those can read the token. Hooks and MCP
 servers a project adds can do the same. Open only projects you trust while a token is
-stored, or run `/skaile disconnect` first.
+stored, or remove it first with `node "<plugin>/dist/cli.cjs" disconnect` in a terminal.
 
 The plugin needs Node.js 20.3 or newer as the first `node` on `PATH`; an older one fails at
 start with a message that says so.
