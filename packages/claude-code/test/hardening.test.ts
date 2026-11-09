@@ -176,7 +176,7 @@ describe('the token never follows a redirect', () => {
   })
 
   it('long-poll drops a connection whose GET answer is far larger than the server ever sends', async () => {
-    const huge = `{"frames":[],"cursor":"c.0","pad":"${'x'.repeat(17 * 1024 * 1024)}"}`
+    const huge = `{"frames":[],"cursor":"c.0","pad":"${'x'.repeat(5 * 1024 * 1024)}"}`
     const origin = await listen((req, res) => {
       if (req.method === 'POST') {
         res.writeHead(200).end(JSON.stringify({ connectionId: 'c', cursor: 'c.0' }))
@@ -505,6 +505,25 @@ describe('the unauthorized refusal clock (fake clock)', () => {
     expect(client.getStatus().state).toBe('retrying')
     // Five minutes after the run that began at minute four, it stops.
     await vi.advanceTimersByTimeAsync(4 * 60_000)
+    expect(client.getStatus()).toMatchObject({ state: 'stopped', reason: 'unauthorized' })
+  })
+
+  it('starts the clock again after a long gap between refusals, such as a laptop sleep', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] })
+    let refusals = 0
+    const client = stubClient(async () => {
+      refusals += 1
+      throw refused()
+    })
+    client.start()
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(refusals).toBeGreaterThanOrEqual(3)
+    // A ten-minute sleep: the wall clock jumps, but no timer runs in between.
+    vi.setSystemTime(Date.now() + 10 * 60_000)
+    await vi.advanceTimersByTimeAsync(1_000)
+    // Without the gap check, the refusals before and after the sleep would span the give-up time.
+    expect(client.getStatus().state).toBe('retrying')
+    await vi.advanceTimersByTimeAsync(UNAUTHORIZED_GIVE_UP_MS + 1_000)
     expect(client.getStatus()).toMatchObject({ state: 'stopped', reason: 'unauthorized' })
   })
 })
