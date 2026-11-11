@@ -12,18 +12,39 @@ describe('config', () => {
     expect(webSocketUrl(DEFAULT_API_URL)).toBe('wss://platform-api.skaile.ai/harness/connect')
   })
 
-  it('takes SKAILE_API_URL for a Skaile host or localhost, and SKAILE_TRANSPORT', () => {
-    expect(loadConfig({ SKAILE_API_URL: 'https://staging-api.skaile.ai/', SKAILE_TRANSPORT: 'long-poll' })).toEqual({
-      apiUrl: 'https://staging-api.skaile.ai',
-      transport: 'long-poll',
-    })
-    expect(loadConfig({ SKAILE_API_URL: 'http://localhost:3000' }).apiUrl).toBe('http://localhost:3000')
+  it('takes SKAILE_API_URL for one of Skaile’s API hosts, and SKAILE_TRANSPORT', () => {
+    expect(
+      loadConfig({ SKAILE_API_URL: 'https://staging-platform-api.skaile.ai/', SKAILE_TRANSPORT: 'long-poll' }),
+    ).toEqual({ apiUrl: 'https://staging-platform-api.skaile.ai', transport: 'long-poll' })
+    expect(loadConfig({ SKAILE_API_URL: 'https://platform-api.skaile.ai:443' }).apiUrl).toBe(DEFAULT_API_URL)
   })
 
-  it('refuses a foreign host from the environment, so a project cannot send the token elsewhere', () => {
-    expect(() => loadConfig({ SKAILE_API_URL: 'https://evil.example' })).toThrow(/not a Skaile host/)
-    expect(() => loadConfig({ SKAILE_API_URL: 'https://skaile.ai.evil.example' })).toThrow(/not a Skaile host/)
-    expect(() => loadConfig({ SKAILE_API_URL: 'https://evilskaile.ai' })).toThrow(/not a Skaile host/)
+  it('refuses any other host from the environment, so a project cannot point the token elsewhere', () => {
+    for (const url of [
+      'https://evil.example',
+      'https://skaile.ai.evil.example',
+      'https://evilskaile.ai',
+      // Exact hosts only: another skaile.ai subdomain, the apex or another port is not the API.
+      'https://skaile.ai',
+      'https://uploads.skaile.ai',
+      'https://platform-api.skaile.ai:8443',
+      // localhost (any port: another local process may listen there) only once saved.
+      'http://localhost:3000',
+      'http://127.0.0.1:8080',
+      'http://[::1]:3000',
+    ]) {
+      expect(() => loadConfig({ SKAILE_API_URL: url }), url).toThrow(/not a Skaile API host/)
+    }
+  })
+
+  it('accepts localhost the user saved in a terminal, and from the environment only that one', () => {
+    expect(loadConfig({}, 'http://localhost:3000').apiUrl).toBe('http://localhost:3000')
+    expect(loadConfig({ SKAILE_API_URL: 'http://localhost:3000' }, 'http://localhost:3000').apiUrl).toBe(
+      'http://localhost:3000',
+    )
+    expect(() => loadConfig({ SKAILE_API_URL: 'http://localhost:4000' }, 'http://localhost:3000')).toThrow(
+      /not a Skaile API host/,
+    )
   })
 
   it('accepts a foreign host the user saved in a terminal', () => {
@@ -36,7 +57,7 @@ describe('config', () => {
 
   it('takes an origin only: a path on a trusted host is refused', () => {
     expect(() => loadConfig({ SKAILE_API_URL: 'https://platform-api.skaile.ai/other/route' })).toThrow(/origin only/)
-    expect(() => loadConfig({ SKAILE_API_URL: 'http://localhost:3000/x' })).toThrow(/origin only/)
+    expect(() => loadConfig({}, 'http://localhost:3000/x')).toThrow(/origin only/)
     expect(() => loadConfig({}, 'https://skaile.corp.example/api')).toThrow(/origin only/)
   })
 

@@ -227,7 +227,7 @@ describe('reconnect rules', () => {
     expect(server.connections).toHaveLength(1)
     expect((await rejection(c.listPeers())).code).toBe('revoked')
 
-    // `/skaile connect` stores a new token; the next tool call reads it and connects.
+    // The terminal `connect` stores a new token; the next tool call reads it and connects.
     tokens.token = OTHER_TOKEN
     expect(await c.listPeers()).toEqual(PEERS)
     expect(server.connections[1]?.authorization).toBe(`Bearer ${OTHER_TOKEN}`)

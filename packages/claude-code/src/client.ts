@@ -128,6 +128,8 @@ export class SkaileClient {
   /** When (epoch ms) the current run of unauthorized refusals began; null when none. */
   private unauthorizedSince: number | null = null
   private unauthorizedCount = 0
+  /** When (epoch ms) the last unauthorized refusal of the current run came; null when none. */
+  private unauthorizedLastAt: number | null = null
   private retryTimer: ReturnType<typeof setTimeout> | null = null
   /** Not before this (epoch ms): a 429's `retryAfterMs`, which even a tool call respects. */
   private notBefore = 0
@@ -172,7 +174,7 @@ export class SkaileClient {
 
   /**
    * Resolves once connected, or throws a SkaileError that says why not. A tool call goes through
-   * here: it re-reads the token when not connected, so a token stored by `/skaile connect` is used
+   * here: it re-reads the token when not connected, so a token stored in a terminal (`cli.cjs connect`) is used
    * without restarting the server, and it skips a running backoff (but not a 429's wait).
    */
   async ensureConnected(): Promise<Live> {
@@ -507,11 +509,17 @@ export class SkaileClient {
 
   /**
    * The server may refuse a valid token for a while (account standing unreadable); keep retrying
-   * with backoff, and give up only once it has been refused without a break for unauthorizedGiveUpMs
-   * and at least MIN_UNAUTHORIZED_REFUSALS times.
+   * with backoff, and give up only once it has been refused without a break (no other failure, no
+   * long gap such as a sleep) for unauthorizedGiveUpMs and at least MIN_UNAUTHORIZED_REFUSALS times.
    */
   private onUnauthorized(token: string): void {
     const now = Date.now()
+    // A gap far longer than any retry delay (a laptop sleep: timers do not run) breaks the run,
+    // so refusals before and after it do not add up to the give-up time.
+    if (this.unauthorizedLastAt !== null && now - this.unauthorizedLastAt > this.unauthorizedMaxGapMs()) {
+      this.resetUnauthorized()
+    }
+    this.unauthorizedLastAt = now
     this.unauthorizedSince ??= now
     this.unauthorizedCount += 1
     if (
@@ -521,7 +529,7 @@ export class SkaileClient {
       this.stop('unauthorized', describeError('unauthorized'), token)
       return
     }
-    this.scheduleRetry('Skaile refused the token; retrying, as the refusal may be temporary')
+    this.scheduleRetry('Skaile refused the token; retrying, as the refusal may be temporary', undefined, true)
   }
 
   private afterError(frame: HarnessChannelErrorFrame, token: string): void {
@@ -566,6 +574,16 @@ export class SkaileClient {
   private resetUnauthorized(): void {
     this.unauthorizedSince = null
     this.unauthorizedCount = 0
+    this.unauthorizedLastAt = null
+  }
+
+  /**
+   * Longer than any gap between two refusals while awake: twice the longest retry delay, plus the
+   * slowest refused attempt (the open, up to 30 s for a long-poll POST, then the wait for the
+   * welcome), plus a margin. A slower attempt times out, which already breaks the run.
+   */
+  private unauthorizedMaxGapMs(): number {
+    return 2 * this.backoffMaxMs + this.requestTimeoutMs + 45_000
   }
 
   private stop(reason: StopReason, message: string, token: string | null): void {
@@ -578,7 +596,14 @@ export class SkaileClient {
     this.log(`stopped: ${message}`)
   }
 
-  private scheduleRetry(lastError: string, serverRetryAfterMs?: number): void {
+  /**
+   * `unauthorized` keeps the refusal clock running; any other failure (the network, a 429, a
+   * close) breaks the run of refusals, so the clock starts again at the next one.
+   */
+  private scheduleRetry(lastError: string, serverRetryAfterMs?: number, unauthorized = false): void {
+    if (!unauthorized) {
+      this.resetUnauthorized()
+    }
     this.clearRetry()
     if (this.closed) {
       return

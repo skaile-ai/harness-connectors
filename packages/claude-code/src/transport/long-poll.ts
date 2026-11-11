@@ -3,7 +3,15 @@ import {
   HARNESS_CHANNEL_POLL_WAIT_MS,
   type HarnessChannelFrame,
 } from '@skaile/harness-protocol'
-import { OpenError, type OpenTransport, refusalFromResponse, type Transport, type TransportEvents } from './types.js'
+import { splitPollBatch } from './poll-batch.js'
+import {
+  MAX_INBOUND_MESSAGE_BYTES,
+  OpenError,
+  type OpenTransport,
+  refusalFromResponse,
+  type Transport,
+  type TransportEvents,
+} from './types.js'
 
 /** At most this many frames per `POST` (the server's batch limit). */
 const MAX_BATCH_FRAMES = 100
@@ -11,10 +19,12 @@ const MAX_BATCH_FRAMES = 100
 const GET_TIMEOUT_MS = HARNESS_CHANNEL_POLL_WAIT_MS + 10_000
 const POST_TIMEOUT_MS = 30_000
 /** The server answers a `GET` with at most ~1 MiB of frames (plus one oversize frame); anything far larger is not it. */
-const MAX_GET_BYTES = 4 * 1024 * 1024
+const MAX_GET_BYTES = MAX_INBOUND_MESSAGE_BYTES
 const MAX_OPEN_BYTES = 64 * 1024
 /** Failed `GET`s in a row before the connection counts as lost. Under the server's 60 s idle drop. */
 const MAX_GET_FAILURES = 3
+/** After a `POST` got 404, how long the one `GET` that fetches the connection's close code may take. */
+const CLOSE_CHECK_TIMEOUT_MS = 5_000
 
 /** Local close codes for a connection this client lost, not one the server closed. */
 export const CLOSE_CONNECTION_LOST = 1006
@@ -61,6 +71,10 @@ class LongPollTransport implements Transport {
   private readonly queue: HarnessChannelFrame[] = []
   private flushing = false
   private readonly getAbort = new AbortController()
+  /** Aborts only the `GET` in flight, so the poll loop asks again at once. */
+  private currentGet: AbortController | null = null
+  /** A `POST` got 404: the next `GET` fetches the close code, and the connection ends after it. */
+  private closeCheck = false
 
   constructor(
     private readonly url: string,
@@ -77,7 +91,10 @@ class LongPollTransport implements Transport {
       return
     }
     this.queue.push(frame)
-    void this.flush()
+    if (!this.closeCheck) {
+      // After a 404 the connection is gone: queued frames fail when it ends, nothing more is sent.
+      void this.flush()
+    }
   }
 
   close(): void {
@@ -93,7 +110,7 @@ class LongPollTransport implements Transport {
     }
     this.flushing = true
     try {
-      while (!this.ended && this.queue.length > 0) {
+      while (!this.ended && !this.closeCheck && this.queue.length > 0) {
         const batch = this.queue.splice(0, MAX_BATCH_FRAMES)
         let status: number
         try {
@@ -115,11 +132,19 @@ class LongPollTransport implements Transport {
           this.end(CLOSE_SHUTDOWN, 'shutdown')
           return
         }
-        if (status !== 200) {
-          // 404: the connection ended. Its close code arrives with the next GET, if it is still there.
-          if (status !== 404) {
-            this.end(CLOSE_CONNECTION_LOST, 'connection_lost')
+        if (status === 404) {
+          // The connection ended and this batch was dropped. Ask once more, now, for its close
+          // code (a `replaced` must not turn into a reconnect), then end it either way, so the
+          // requests in the batch fail at once instead of timing out.
+          if (!this.closeCheck) {
+            // Only the `GET` that was waiting: never the one that fetches the close code.
+            this.closeCheck = true
+            this.currentGet?.abort()
           }
+          return
+        }
+        if (status !== 200) {
+          this.end(CLOSE_CONNECTION_LOST, 'connection_lost')
           return
         }
       }
@@ -134,11 +159,18 @@ class LongPollTransport implements Transport {
     while (!this.ended) {
       let status = 0
       let text = ''
+      const closeCheck = this.closeCheck
+      const get = new AbortController()
+      this.currentGet = get
       try {
         const response = await fetch(`${this.url}?cursor=${encodeURIComponent(cursor)}`, {
           headers: this.headers(),
           redirect: 'error',
-          signal: AbortSignal.any([this.getAbort.signal, AbortSignal.timeout(GET_TIMEOUT_MS)]),
+          signal: AbortSignal.any([
+            this.getAbort.signal,
+            get.signal,
+            AbortSignal.timeout(closeCheck ? CLOSE_CHECK_TIMEOUT_MS : GET_TIMEOUT_MS),
+          ]),
         })
         status = response.status
         const capped = await readCapped(response, MAX_GET_BYTES)
@@ -149,18 +181,20 @@ class LongPollTransport implements Transport {
         text = capped
       } catch {
         status = 0
+      } finally {
+        this.currentGet = null
       }
       if (this.ended) {
         return
       }
+      if (this.closeCheck && !closeCheck && status !== 200) {
+        // A `POST` got 404 while this `GET` waited, and aborted it: ask again at once, with the
+        // same cursor, which re-sends anything the aborted one would have carried.
+        continue
+      }
       if (status === 200) {
-        let batch: { frames?: unknown; cursor?: unknown; closed?: { code?: unknown; reason?: unknown } }
-        try {
-          batch = JSON.parse(text)
-        } catch {
-          batch = {}
-        }
-        if (!Array.isArray(batch.frames) || typeof batch.cursor !== 'string') {
+        const batch = parseBatch(text)
+        if (!batch) {
           this.end(CLOSE_CONNECTION_LOST, 'connection_lost')
           return
         }
@@ -170,12 +204,17 @@ class LongPollTransport implements Transport {
           if (this.ended) {
             return
           }
-          this.events.onFrame(JSON.stringify(frame))
+          // Raw text: the client checks its size before it parses it.
+          this.events.onFrame(frame)
         }
         if (batch.closed) {
           const code = typeof batch.closed.code === 'number' ? batch.closed.code : CLOSE_CONNECTION_LOST
           const reason = typeof batch.closed.reason === 'string' ? batch.closed.reason : 'connection_lost'
           this.end(code, reason)
+          return
+        }
+        if (closeCheck) {
+          this.end(CLOSE_CONNECTION_LOST, 'connection_lost')
           return
         }
         continue
@@ -184,7 +223,7 @@ class LongPollTransport implements Transport {
         this.end(CLOSE_SHUTDOWN, 'shutdown')
         return
       }
-      if (status === 404 || status === 401 || status === 400) {
+      if (closeCheck || status === 404 || status === 401 || status === 400) {
         this.end(CLOSE_CONNECTION_LOST, 'connection_lost')
         return
       }
@@ -210,6 +249,24 @@ class LongPollTransport implements Transport {
     this.getAbort.abort()
     this.events.onClose(code, reason)
   }
+}
+
+/** A `GET` answer, its frames still raw; null when it is not one. */
+function parseBatch(
+  text: string,
+): { frames: string[]; cursor: string; closed: { code?: unknown; reason?: unknown } | null } | null {
+  let raw: ReturnType<typeof splitPollBatch>
+  try {
+    raw = splitPollBatch(text)
+  } catch {
+    return null
+  }
+  if (!raw || raw.frames === null || typeof raw.cursor !== 'string') {
+    return null
+  }
+  const closed =
+    raw.closed && typeof raw.closed === 'object' ? (raw.closed as { code?: unknown; reason?: unknown }) : null
+  return { frames: raw.frames, cursor: raw.cursor, closed }
 }
 
 /** The response body as text, or null when it is larger than `maxBytes` (the read stops there). */

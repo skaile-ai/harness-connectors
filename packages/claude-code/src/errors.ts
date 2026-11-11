@@ -30,15 +30,15 @@ export function describeError(code: SkaileErrorCode, detail?: string, retryAfter
     case 'peer_offline':
       return 'peer_offline: the Skaile session cannot take a message right now (it is closed, or the connection dropped while waiting). Try again later.'
     case 'revoked':
-      return 'revoked: this agent was revoked in Skaile, so the connection is closed. The user needs a new remote-agent token from Skaile and then runs /skaile connect.'
+      return 'revoked: this agent was revoked in Skaile, so the connection is closed. The user needs a new remote-agent token from Skaile; /skaile connect shows how to store it.'
     case 'unsupported_version':
       return 'unsupported_version: Skaile does not accept this plugin’s protocol version (1.0). The user needs to update the Skaile Claude Code plugin.'
     case 'unauthorized':
-      return 'unauthorized: Skaile refused the token (it was rotated, or its owner lost access to the agent). The user runs /skaile connect with a current token, or /skaile reconnect to try this one again.'
+      return 'unauthorized: Skaile refused the token (it was rotated, or its owner lost access to the agent). The user stores a current token (/skaile connect shows how), or runs /skaile reconnect to try this one again.'
     case 'replaced':
       return 'replaced: another Claude Code session took over this agent’s Skaile connection (an agent has one live connection, the newest). Run /skaile reconnect in this session to take it back.'
     case 'no_token':
-      return 'not_connected: no Skaile token is stored. The user runs /skaile connect <token> (or the terminal command that /skaile connect without a token prints).'
+      return 'not_connected: no Skaile token is stored. The user runs /skaile connect, which shows the terminal command that stores a token.'
     case 'not_connected':
       return `not_connected: not connected to Skaile${detail ? ` (${detail})` : ''}. It keeps retrying; /skaile status shows the state.`
     case 'rate_limited':

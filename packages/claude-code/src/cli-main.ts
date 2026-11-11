@@ -1,3 +1,5 @@
+// First: checks the Node version before anything else loads.
+import './node-version.js'
 import { runCli } from './cli.js'
 import { createTokenStore } from './token-store.js'
 
