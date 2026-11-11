@@ -1,24 +1,32 @@
+import { execFileSync } from 'node:child_process'
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { InboxCounts } from './inbox.js'
 import { configDir } from './paths.js'
 
 /**
- * The inbox counts the connected MCP server writes, so the plugin's UserPromptSubmit hook (a
- * separate process) can tell Claude that questions or messages from Skaile are waiting. Only
- * counts, never message text: the hook's output goes into the model's context unasked.
+ * The inbox counts an MCP server writes, so the plugin's UserPromptSubmit hook (a separate
+ * process) can tell Claude that questions or messages from Skaile are waiting. Only counts, never
+ * message text: the hook's output goes into the model's context unasked. One file per Claude Code
+ * process (`owner`: the MCP server's parent, an ancestor of the hook), so one window's reminder
+ * never counts another window's messages.
  */
 export type InboxState = InboxCounts & { pid: number; updatedAt: string }
 
-export function inboxStatePath(dir: string = configDir()): string {
-  return join(dir, 'inbox.json')
+export function inboxStatePath(owner: number, dir: string = configDir()): string {
+  return join(dir, `inbox-${owner}.json`)
 }
 
 /** Writes the counts (mode 0600, atomically); an empty inbox removes the file. */
-export function writeInboxState(counts: InboxCounts, dir: string = configDir(), pid = process.pid): void {
-  const path = inboxStatePath(dir)
+export function writeInboxState(
+  counts: InboxCounts,
+  owner: number,
+  dir: string = configDir(),
+  pid = process.pid,
+): void {
+  const path = inboxStatePath(owner, dir)
   if (counts.questions === 0 && counts.messages === 0) {
-    clearInboxState(dir, pid)
+    clearInboxState(owner, dir, pid)
     return
   }
   mkdirSync(dir, { recursive: true, mode: 0o700 })
@@ -28,17 +36,17 @@ export function writeInboxState(counts: InboxCounts, dir: string = configDir(), 
   renameSync(temp, path)
 }
 
-/** Removes the file if this process wrote it (another Claude Code window may own it now). */
-export function clearInboxState(dir: string = configDir(), pid = process.pid): void {
-  const state = readInboxState(dir)
+/** Removes the file if this process wrote it. */
+export function clearInboxState(owner: number, dir: string = configDir(), pid = process.pid): void {
+  const state = readInboxState(owner, dir)
   if (state && state.pid === pid) {
-    rmSync(inboxStatePath(dir), { force: true })
+    rmSync(inboxStatePath(owner, dir), { force: true })
   }
 }
 
-export function readInboxState(dir: string = configDir()): InboxState | null {
+export function readInboxState(owner: number, dir: string = configDir()): InboxState | null {
   try {
-    const value = JSON.parse(readFileSync(inboxStatePath(dir), 'utf8')) as Partial<InboxState>
+    const value = JSON.parse(readFileSync(inboxStatePath(owner, dir), 'utf8')) as Partial<InboxState>
     if (
       typeof value.pid === 'number' &&
       Number.isSafeInteger(value.questions) &&
@@ -51,6 +59,37 @@ export function readInboxState(dir: string = configDir()): InboxState | null {
     // Missing or unreadable: nothing is waiting.
   }
   return null
+}
+
+/**
+ * The Claude Code processes the hook may belong to: its parent, and that one's parent (Claude Code
+ * may run the hook command through a shell). The first with a state file wins.
+ */
+export function hookOwners(parent: number = process.ppid): number[] {
+  const grandparent = parentOf(parent)
+  return grandparent !== undefined && grandparent > 1 ? [parent, grandparent] : [parent]
+}
+
+/** A process's parent: `/proc` on Linux, `ps` elsewhere (macOS); undefined when neither works. */
+function parentOf(pid: number): number | undefined {
+  try {
+    // Field 4 of /proc/<pid>/stat, counted after the parenthesised command name.
+    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8')
+    const value = Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[1])
+    if (Number.isSafeInteger(value)) {
+      return value
+    }
+  } catch {
+    // Not Linux: try ps.
+  }
+  try {
+    const value = Number(
+      execFileSync('ps', ['-o', 'ppid=', '-p', String(pid)], { encoding: 'utf8', timeout: 1_000 }).trim(),
+    )
+    return Number.isSafeInteger(value) ? value : undefined
+  } catch {
+    return undefined
+  }
 }
 
 /** Whether a process is still running: a crashed server's file must not keep announcing messages. */

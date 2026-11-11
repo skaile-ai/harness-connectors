@@ -1,12 +1,11 @@
 // First: checks the Node version before anything else loads.
 import './node-version.js'
-import type { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { SkaileClient } from './client.js'
 import { loadConfig, readSavedApiUrl } from './config.js'
 import { Inbox } from './inbox.js'
 import { clearInboxState, writeInboxState } from './inbox-state.js'
-import { createMcpServer, pushToChannel } from './server.js'
+import { createMcpServer, PeerNames, pushToChannel } from './server.js'
 import { createTokenStore } from './token-store.js'
 
 /**
@@ -17,20 +16,19 @@ import { createTokenStore } from './token-store.js'
 async function main(): Promise<void> {
   const log = (message: string) => process.stderr.write(`[skaile] ${message}\n`)
   let client: SkaileClient | null = null
-  let server: Server | null = null
   let configError = ''
+  // The Claude Code process that started this server; the hook finds the state file by it.
+  const owner = process.ppid
+  const names = new PeerNames(() => client)
+  const mcp: { server?: ReturnType<typeof createMcpServer> } = {}
   const inbox = new Inbox({
-    resolveName: async (sessionId) => {
-      const known = client?.getLastPeers()?.peers.find((peer) => peer.sessionId === sessionId)
-      const peer = known ?? (await client?.listPeers())?.find((candidate) => candidate.sessionId === sessionId)
-      return peer?.agentName || peer?.name
-    },
+    resolveName: (sessionId) => names.lookup(sessionId),
     deliver: (entry) => {
-      if (server) {
-        pushToChannel(server, entry, log)
+      if (mcp.server) {
+        pushToChannel(mcp.server, entry, log)
       }
     },
-    onChange: (counts) => writeInboxState(counts),
+    onChange: (counts) => writeInboxState(counts, owner),
     log,
   })
   try {
@@ -46,24 +44,24 @@ async function main(): Promise<void> {
     log(configError)
   }
 
-  const mcp = createMcpServer({ client, configError, inbox })
-  server = mcp
+  const server = createMcpServer({ client, configError, inbox })
+  mcp.server = server
 
   const shutdown = () => {
     client?.close()
     inbox.dispose()
     try {
-      clearInboxState()
+      clearInboxState(owner)
     } catch {
       // Best effort: the hook ignores a file whose process is gone.
     }
-    void mcp.close().finally(() => process.exit(0))
+    void server.close().finally(() => process.exit(0))
   }
   process.stdin.on('close', shutdown)
   process.on('SIGTERM', shutdown)
   process.on('SIGINT', shutdown)
 
-  await mcp.connect(new StdioServerTransport())
+  await server.connect(new StdioServerTransport())
   client?.start()
 }
 

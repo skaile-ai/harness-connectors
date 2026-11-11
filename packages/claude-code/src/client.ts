@@ -780,6 +780,7 @@ export class SkaileClient {
     }
     if (frame.exchangeId) {
       // An exchange a Skaile session opened is over (`timeout`, or the session declined it).
+      this.log(`server ended exchange ${frame.exchangeId}: ${frame.code}`)
       this.deliver({ type: 'closed', exchangeId: frame.exchangeId, code: frame.code })
       return
     }

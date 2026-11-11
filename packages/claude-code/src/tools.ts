@@ -120,7 +120,7 @@ export async function callTool(client: SkaileClient, name: string, args: unknown
             inbox.close(exchangeId, error.code)
             throw new SkaileError(
               error.code,
-              `${error.code}: Skaile no longer takes an answer to this question (it is closed). Send ${question.from} a message with send_skaile instead, if the answer still matters.`,
+              `${error.code}: Skaile no longer takes an answer to this question: it was answered already (an earlier answer_skaile may have reached Skaile), or it timed out. Send ${question.from} a message with send_skaile instead, if the answer still matters.`,
             )
           }
           throw error
@@ -129,8 +129,8 @@ export async function callTool(client: SkaileClient, name: string, args: unknown
         return ok(`Skaile accepted the answer for ${question.from} (Skaile session ${oneLine(question.sessionId)}).`)
       }
       case 'check_skaile_inbox': {
-        const { questions, messages } = inbox ? inbox.read() : { questions: [], messages: [] }
-        if (!questions.length && !messages.length) {
+        const { questions, messages, more } = inbox ? inbox.read() : { questions: [], messages: [], more: 0 }
+        if (!questions.length && !messages.length && !more) {
           return ok('No questions or messages from Skaile agents are waiting.')
         }
         const parts = [
@@ -138,6 +138,7 @@ export async function callTool(client: SkaileClient, name: string, args: unknown
           ...questions.map((entry) => `---\n${describeEntry(entry)}`),
           messages.length ? `Unread messages (${messages.length}):` : '',
           ...messages.map((entry) => `---\n${describeEntry(entry)}`),
+          more ? `${more} more did not fit; call check_skaile_inbox again for them.` : '',
         ].filter(Boolean)
         return ok(parts.join('\n\n'))
       }

@@ -66,3 +66,50 @@ export function pushToChannel(server: Server, entry: InboxEntry, log: (message: 
     >[0])
     .catch((error: unknown) => log(`channel event not sent: ${(error as Error).message}`))
 }
+
+/** After a lookup that did not find a session, another `peers` request waits this long. */
+const PEER_MISS_TTL_MS = 60_000
+
+/**
+ * Sender names for inbound events: the last `peers` result first, else one `peers` request shared
+ * by every lookup that waits on it, and a session still unknown is not asked about again for a
+ * minute, so a burst of messages never floods Skaile with `peers` requests.
+ */
+export class PeerNames {
+  private inflight: Promise<void> | null = null
+  private missedAt = new Map<string, number>()
+
+  constructor(private readonly client: () => SkaileClient | null) {}
+
+  async lookup(sessionId: string): Promise<string | undefined> {
+    const cached = this.find(sessionId)
+    if (cached !== undefined) {
+      return cached
+    }
+    const client = this.client()
+    const missed = this.missedAt.get(sessionId)
+    if (!client || (missed !== undefined && Date.now() - missed < PEER_MISS_TTL_MS)) {
+      return undefined
+    }
+    this.inflight ??= client
+      .listPeers()
+      .then(() => undefined)
+      .catch(() => undefined)
+      .finally(() => {
+        this.inflight = null
+      })
+    await this.inflight
+    const found = this.find(sessionId)
+    if (found === undefined) {
+      this.missedAt.set(sessionId, Date.now())
+    }
+    return found
+  }
+
+  private find(sessionId: string): string | undefined {
+    const peer = this.client()
+      ?.getLastPeers()
+      ?.peers.find((candidate) => candidate.sessionId === sessionId)
+    return peer ? peer.agentName || peer.name : undefined
+  }
+}
