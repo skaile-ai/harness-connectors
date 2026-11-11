@@ -31,6 +31,26 @@ describe('the /skaile command', () => {
     }
   })
 
+  it('a token outside connect (bare, after status or reconnect) gets the terminal command, never echoed', async () => {
+    for (const args of [
+      [TOKEN],
+      ['skr_test'],
+      ['status', TOKEN],
+      ['status', 'skr_test'],
+      ['reconnect', TOKEN],
+      ['frobnicate', TOKEN],
+    ]) {
+      const { value, out, tokens } = io('')
+      expect(await runCli(['command', ...args], value), args.join(' ')).toBe(1)
+      const text = out.join('')
+      expect(tokens.token).toBeNull()
+      expect(text, args.join(' ')).toContain('node "/plugin/dist/cli.cjs" connect')
+      expect(text, args.join(' ')).toMatch(/create a new one in Skaile/)
+      expect(text, args.join(' ')).not.toContain('skr_')
+      expect(text, args.join(' ')).not.toMatch(/skaile_status|skaile_reconnect|Usage:/)
+    }
+  })
+
   it('connect without a token shows the terminal command', async () => {
     const { value, out } = io('')
     expect(await runCli(['command', 'connect'], value)).toBe(0)
@@ -97,6 +117,8 @@ describe('the /skaile command', () => {
     expect(text).toContain('call the skaile_status tool')
     expect(text).toContain('call the skaile_reconnect tool')
     expect(text).toMatch(/Usage:/)
+    // The token rule applies before any subcommand, so `/skaile skr_…` and `/skaile status skr_…` are covered.
+    expect(text).toMatch(/^First: if anything the user typed after \/skaile starts with skr_/)
   })
 
   it('the slash command passes no arguments to a shell or a process', async () => {

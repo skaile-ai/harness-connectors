@@ -82,12 +82,21 @@ export async function runCli(argv: string[], io: CliIo): Promise<number> {
 const connectLine = (io: CliIo) =>
   `the user runs this in a terminal and pastes the token when asked:\n\n  node "${io.cliPath}" connect\n\nThen /skaile reconnect here.`
 
+/** Anything the user typed that looks like a Skaile token, valid or not: it is now in the conversation. */
+const looksLikeToken = (word: string) => word.startsWith('skr_')
+
+const tokenReply = (io: CliIo) =>
+  `Nothing was stored: /skaile does not take a token. To store one, ${connectLine(io)} Tell the user exactly that and show the command, without repeating what they typed. If it was a real token, it is now in this conversation; they can create a new one in Skaile.\n`
+
 const disconnectLine = (io: CliIo) =>
   `the user runs this in a terminal:\n\n  node "${io.cliPath}" disconnect\n\nThen /skaile reconnect here, so this session drops its connection.`
 
 function guide(io: CliIo): string {
   return [
-    'For each /skaile subcommand, do this:',
+    'First: if anything the user typed after /skaile starts with skr_ (a Skaile token), whatever the subcommand, or none: do not call any tool and do not repeat it. Nothing was stored: /skaile does not take a token. To store one, ' +
+      `${connectLine(io)} Tell the user exactly that and show the command. If it was a real token, it is now in this conversation, so they can create a new one in Skaile.`,
+    '',
+    'Otherwise, for each /skaile subcommand, do this:',
     '',
     `- connect: to store a Skaile token, ${connectLine(io)} Tell the user exactly that and show the command. If they typed anything after connect, nothing was stored: do not repeat it, and if it was a real token, it is now in this conversation, so they can create a new one in Skaile.`,
     '- status (or nothing): call the skaile_status tool and show the user its result.',
@@ -100,6 +109,11 @@ function guide(io: CliIo): string {
 
 async function slashCommand(words: string[], io: CliIo): Promise<number> {
   const [sub, ...rest] = words
+  // A token anywhere (bare, after status, …) gets the token reply, never the subcommand's line.
+  if (words.some(looksLikeToken)) {
+    io.write(tokenReply(io))
+    return 1
+  }
   switch (sub) {
     case undefined:
       io.write(guide(io))
@@ -110,9 +124,7 @@ async function slashCommand(words: string[], io: CliIo): Promise<number> {
         return 0
       }
       // Never stored from here, whatever it is (see the header): the terminal is the only path.
-      io.write(
-        `Nothing was stored: /skaile does not take a token. To store one, ${connectLine(io)} Tell the user exactly that and show the command, without repeating what they typed after connect. If it was a real token, it is now in this conversation; they can create a new one in Skaile.\n`,
-      )
+      io.write(tokenReply(io))
       return 1
     }
     case 'status':
