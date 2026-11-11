@@ -1,4 +1,4 @@
-import { SkaileClient } from '../src/client.js'
+import { type InboundEvent, SkaileClient } from '../src/client.js'
 import type { TransportMode } from '../src/config.js'
 import type { TokenStore } from '../src/token-store.js'
 
@@ -28,6 +28,7 @@ export function makeClient(
     askTimeoutMs?: number
     unauthorizedGiveUpMs?: number
     stableAfterMs?: number
+    onInbound?: (event: InboundEvent) => boolean
   } = {},
 ): SkaileClient {
   return new SkaileClient({
@@ -40,5 +41,6 @@ export function makeClient(
     backoffMaxMs: 200,
     ...(options.unauthorizedGiveUpMs === undefined ? {} : { unauthorizedGiveUpMs: options.unauthorizedGiveUpMs }),
     ...(options.stableAfterMs === undefined ? {} : { stableAfterMs: options.stableAfterMs }),
+    ...(options.onInbound ? { onInbound: options.onInbound } : {}),
   })
 }
