@@ -135,11 +135,12 @@ export async function callTool(client: SkaileClient, name: string, args: unknown
         }
         const parts = [
           questions.length ? `Open questions (${questions.length}):` : '',
-          ...questions.map((entry) => `---\n${describeEntry(entry)}`),
+          ...questions.map((entry) => `---\n${describeEntry(entry, { brief: entry.shown === true })}`),
           messages.length ? `Unread messages (${messages.length}):` : '',
           ...messages.map((entry) => `---\n${describeEntry(entry)}`),
           more ? `${more} more did not fit; call check_skaile_inbox again for them.` : '',
         ].filter(Boolean)
+        inbox?.markShown(questions)
         return ok(parts.join('\n\n'))
       }
       case 'list_skaile_peers': {

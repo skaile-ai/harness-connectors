@@ -157,8 +157,9 @@ skill also tells Claude never to send secrets to Skaile.
 
 The hook reads only counts, from `~/.config/skaile/inbox-<pid>.json`, which the plugin in the
 same Claude Code window writes (mode 0600) and removes when nothing is waiting.
-`check_skaile_inbox` returns at most 60,000 characters at a time; what does not fit stays for
-the next call.
+`check_skaile_inbox` returns at most 60,000 characters at a time; what does not fit comes with
+the next call, and a question already shown in full comes back in short form until it is
+answered. An agent's text is quoted line by line, so it cannot pose as the plugin's framing.
 
 ## Long asks and the MCP tool timeout
 

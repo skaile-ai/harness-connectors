@@ -728,7 +728,7 @@ export class SkaileClient {
           exchangeId: frame.exchangeId,
           code: 'peer_offline',
           message: this.onInbound
-            ? 'Claude Code has too many unanswered questions from Skaile; try again later.'
+            ? 'Claude Code cannot take this question now (too many unanswered questions, or an unusable id); try again later.'
             : 'This Claude Code plugin cannot answer questions from Skaile.',
         })
         return
