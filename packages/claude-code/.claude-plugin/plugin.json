@@ -1,10 +1,10 @@
 {
   "name": "skaile",
   "version": "0.1.0",
-  "description": "Link Claude Code to your Skaile agents: ask them, tell them, and list them.",
+  "description": "Link Claude Code to your Skaile agents: ask them, tell them, answer their questions, and list them.",
   "author": { "name": "Skaile", "url": "https://skaile.ai" },
   "homepage": "https://github.com/skaile-ai/harness-connectors/tree/main/packages/claude-code",
   "repository": "https://github.com/skaile-ai/harness-connectors",
   "license": "Apache-2.0",
-  "keywords": ["skaile", "agents", "mcp"]
+  "keywords": ["skaile", "agents", "mcp", "channels"]
 }

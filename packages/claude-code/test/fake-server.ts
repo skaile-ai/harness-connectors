@@ -91,6 +91,8 @@ export class FakeServer {
   readonly refuseNext: { status: number; code: HarnessChannelErrorCode; retryAfterMs?: number }[] = []
   connectAttempts: { kind: 'websocket' | 'long-poll'; at: number }[] = []
   peers: HarnessChannelPeer[]
+  /** Exchanges a Skaile session opened with an `ask` to the harness, still waiting for the answer. */
+  readonly openExchanges = new Set<string>()
   private active = new Map<string, FakeConnection>()
   private readonly http: Server
   private readonly wss = new WebSocketServer({ noServer: true })
@@ -395,9 +397,49 @@ export class FakeServer {
         }
         connection.send({ type: 'ack', id: randomUUID(), replyTo: frame.id })
         return
+      case 'answer':
+        if (!this.openExchanges.delete(frame.exchangeId)) {
+          connection.send({
+            type: 'error',
+            id: randomUUID(),
+            replyTo: frame.id,
+            exchangeId: frame.exchangeId,
+            code: 'invalid_frame',
+            message: 'No session is waiting for an answer to this exchange',
+          })
+          return
+        }
+        connection.send({ type: 'ack', id: randomUUID(), replyTo: frame.id, exchangeId: frame.exchangeId })
+        return
+      case 'error':
+        if (frame.exchangeId) {
+          this.openExchanges.delete(frame.exchangeId)
+        }
+        return
       default:
         return
     }
+  }
+
+  /** A Skaile session asks the harness: `ask` with a fresh exchangeId. */
+  askHarness(connection: FakeConnection, sessionId: string, text: string): { id: string; exchangeId: string } {
+    const frame = { type: 'ask' as const, id: randomUUID(), exchangeId: randomUUID(), sessionId, text }
+    this.openExchanges.add(frame.exchangeId)
+    connection.send(frame)
+    return frame
+  }
+
+  /** A Skaile session sends the harness a message that needs no answer. */
+  sendHarness(connection: FakeConnection, sessionId: string, text: string): string {
+    const id = randomUUID()
+    connection.send({ type: 'send', id, sessionId, text })
+    return id
+  }
+
+  /** The server ends an exchange it opened: `error` `timeout` after the late-answer window. */
+  timeOutExchange(connection: FakeConnection, exchangeId: string): void {
+    this.openExchanges.delete(exchangeId)
+    connection.send({ type: 'error', id: randomUUID(), exchangeId, code: 'timeout', message: 'timeout' })
   }
 }
 

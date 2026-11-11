@@ -43,8 +43,22 @@ export type ConnectionStatus =
   | { state: 'retrying'; retryAt: Date; lastError: string }
   | { state: 'stopped'; reason: StopReason; message: string }
 
+/**
+ * What a Skaile session sends this harness. `closed` means the server ended an exchange it opened
+ * (`error` with its `exchangeId`, e.g. `timeout`): an answer would now be refused.
+ */
+export type InboundEvent =
+  | { type: 'ask'; exchangeId: string; sessionId: string; text: string }
+  | { type: 'send'; sessionId: string; text: string; exchangeId?: string }
+  | { type: 'closed'; exchangeId: string; code: HarnessChannelErrorCode }
+
 export type ClientOptions = {
   config: Config
+  /**
+   * Takes questions and messages from Skaile sessions. Returns false to decline an `ask` (the
+   * inbox is full). Without it, the client declines every question and drops every message.
+   */
+  onInbound?: (event: InboundEvent) => boolean
   tokens: TokenStore
   /** Replaced in tests. */
   openWebSocket?: OpenTransport
@@ -119,6 +133,7 @@ export class SkaileClient {
   private readonly unauthorizedGiveUpMs: number
   private readonly stableAfterMs: number
   private readonly log: (message: string) => void
+  private readonly onInbound: ((event: InboundEvent) => boolean) | undefined
 
   private status: ConnectionStatus = { state: 'stopped', reason: 'no_token', message: 'not started' }
   private live: Live | null = null
@@ -156,6 +171,7 @@ export class SkaileClient {
     this.unauthorizedGiveUpMs = options.unauthorizedGiveUpMs ?? UNAUTHORIZED_GIVE_UP_MS
     this.stableAfterMs = options.stableAfterMs ?? STABLE_CONNECTION_MS
     this.log = options.log ?? (() => undefined)
+    this.onInbound = options.onInbound
   }
 
   getStatus(): ConnectionStatus {
@@ -268,6 +284,17 @@ export class SkaileClient {
       return (frame as HarnessChannelAnswerFrame).text
     }
     throw errorFromFrame(frame as HarnessChannelErrorFrame)
+  }
+
+  /**
+   * Answers a question a Skaile session asked (`answer` under its `exchangeId`) and waits for the
+   * server's `ack`. The server refuses an answer to an exchange that is over with `invalid_frame`.
+   */
+  async answer(exchangeId: string, text: string): Promise<void> {
+    const reply = await this.request({ type: 'answer', id: randomUUID(), exchangeId, text })
+    if (reply.type !== 'ack') {
+      throw new SkaileError('invalid_frame', describeError('invalid_frame', `unexpected ${reply.type} for answer`))
+    }
   }
 
   // ── Requests ────────────────────────────────────────────────────────────────
@@ -682,19 +709,37 @@ export class SkaileClient {
         }
         return
       }
-      case 'ask':
-        // Answering Skaile's questions inside the Claude Code session is L10 (#9154). Until then the
-        // question is declined at once, so the asking session does not wait 5 minutes for nothing.
+      case 'ask': {
+        const event: InboundEvent = {
+          type: 'ask',
+          exchangeId: frame.exchangeId,
+          sessionId: frame.sessionId,
+          text: frame.text,
+        }
+        if (this.deliver(event)) {
+          this.sendFrame(live, { type: 'ack', id: randomUUID(), replyTo: frame.id, exchangeId: frame.exchangeId })
+          return
+        }
+        // Declined at once, so the asking session does not wait for nothing.
         this.sendFrame(live, {
           type: 'error',
           id: randomUUID(),
           replyTo: frame.id,
           exchangeId: frame.exchangeId,
           code: 'peer_offline',
-          message: 'This Claude Code plugin cannot answer questions from Skaile yet.',
+          message: this.onInbound
+            ? 'Claude Code cannot take this question now (too many unanswered questions, or an unusable id); try again later.'
+            : 'This Claude Code plugin cannot answer questions from Skaile.',
         })
         return
+      }
       case 'send':
+        this.deliver({
+          type: 'send',
+          sessionId: frame.sessionId,
+          text: frame.text,
+          ...(frame.exchangeId ? { exchangeId: frame.exchangeId } : {}),
+        })
         this.sendFrame(live, {
           type: 'ack',
           id: randomUUID(),
@@ -733,6 +778,12 @@ export class SkaileClient {
       byExchange.resolve(frame)
       return
     }
+    if (frame.exchangeId) {
+      // An exchange a Skaile session opened is over (`timeout`, or the session declined it).
+      this.log(`server ended exchange ${frame.exchangeId}: ${frame.code}`)
+      this.deliver({ type: 'closed', exchangeId: frame.exchangeId, code: frame.code })
+      return
+    }
     // About the connection itself: `revoked`/`unauthorized`/`unsupported_version` precede a close.
     this.log(`server error ${frame.code}: ${frame.message}`)
     if (frame.code === 'revoked' || frame.code === 'unsupported_version') {
@@ -743,6 +794,19 @@ export class SkaileClient {
           : HARNESS_CHANNEL_CLOSE_CODES.unsupported_version,
         frame.code,
       )
+    }
+  }
+
+  /** Hands an inbound event to the inbox; a throwing handler must not break the connection. */
+  private deliver(event: InboundEvent): boolean {
+    if (!this.onInbound) {
+      return false
+    }
+    try {
+      return this.onInbound(event)
+    } catch (error) {
+      this.log(`inbound ${event.type} not delivered: ${(error as Error).message}`)
+      return false
     }
   }
 

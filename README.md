@@ -4,10 +4,18 @@ Connectors that let an agent harness on your own machine, such as Claude Code, t
 [Skaile](https://skaile.ai) agents. A connector holds one connection to Skaile as a _remote
 agent_; your Skaile sessions that you linked it to can then be asked, told and listed.
 
-| Package                                        | What it is                                                                                                            |
-| ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| [`packages/claude-code`](packages/claude-code) | Claude Code plugin: an MCP server with `ask_skaile`, `send_skaile` and `list_skaile_peers`, and the `/skaile` command |
-| [`packages/protocol`](packages/protocol)       | Zod schemas of the harness channel wire protocol, v1.0, copied from the Skaile platform                               |
+| Package                                        | What it is                                                                                                                                                                                                                                        |
+| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`packages/claude-code`](packages/claude-code) | Claude Code plugin: an MCP server with `ask_skaile`, `send_skaile`, `answer_skaile`, `check_skaile_inbox` and `list_skaile_peers`, a channel that pushes Skaile's questions into the session, the `/skaile` command and the `skaile-agents` skill |
+| [`packages/protocol`](packages/protocol)       | Zod schemas of the harness channel wire protocol, v1.0, copied from the Skaile platform                                                                                                                                                           |
+
+Install the Claude Code plugin from this repository's marketplace (setup steps in
+[`packages/claude-code`](packages/claude-code#install)):
+
+```
+/plugin marketplace add skaile-ai/harness-connectors
+/plugin install skaile@skaile
+```
 
 The wire protocol is specified in the Skaile platform repository:
 `docs/protocol/harness-channel-v1.md`.
