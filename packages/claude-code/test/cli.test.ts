@@ -138,7 +138,7 @@ describe('the /skaile command', () => {
     ])
     expect(md).not.toMatch(/printf/)
     // The prompt defers to the CLI's token rule, so `/skaile skr_…` never reads as "none means status".
-    expect(md).toMatch(/contains\s+`skr_` \(a token\), follow the CLI's first rule and call no tool/)
+    expect(md).toMatch(/contains\s+`skr_` in any case \(a token\), follow the CLI's first rule and call no tool/)
   })
 
   it('an unknown subcommand prints the usage', async () => {
