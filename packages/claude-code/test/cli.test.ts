@@ -39,6 +39,8 @@ describe('the /skaile command', () => {
       ['status', 'skr_test'],
       ['reconnect', TOKEN],
       ['frobnicate', TOKEN],
+      ['status', 'token=skr_test'],
+      ['SKR_TEST'],
     ]) {
       const { value, out, tokens } = io('')
       expect(await runCli(['command', ...args], value), args.join(' ')).toBe(1)
@@ -118,7 +120,10 @@ describe('the /skaile command', () => {
     expect(text).toContain('call the skaile_reconnect tool')
     expect(text).toMatch(/Usage:/)
     // The token rule applies before any subcommand, so `/skaile skr_…` and `/skaile status skr_…` are covered.
-    expect(text).toMatch(/^First: if anything the user typed after \/skaile starts with skr_/)
+    expect(text).toMatch(/^First: if anything the user typed after \/skaile contains skr_/)
+    expect(text.split('Otherwise,')[0]).toMatch(
+      /do not call any tool[\s\S]*connect"? ?[\s\S]*create a new one in Skaile/,
+    )
   })
 
   it('the slash command passes no arguments to a shell or a process', async () => {
@@ -132,6 +137,8 @@ describe('the /skaile command', () => {
       `!\`node "${root}/dist/cli.cjs" command\``,
     ])
     expect(md).not.toMatch(/printf/)
+    // The prompt defers to the CLI's token rule, so `/skaile skr_…` never reads as "none means status".
+    expect(md).toMatch(/contains\s+`skr_` \(a token\), follow the CLI's first rule and call no tool/)
   })
 
   it('an unknown subcommand prints the usage', async () => {
