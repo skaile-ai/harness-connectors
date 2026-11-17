@@ -27,10 +27,12 @@ afterEach(async () => {
 const text = (result: { content: { text: string }[] }) => result.content.map((c) => c.text).join('\n')
 
 describe('MCP tools', () => {
-  it('declares the five tools with object schemas', () => {
+  it('declares the seven tools with object schemas', () => {
     expect(TOOL_DEFINITIONS.map((t) => t.name)).toEqual([
       'ask_skaile',
       'send_skaile',
+      'answer_skaile',
+      'check_skaile_inbox',
       'list_skaile_peers',
       'skaile_status',
       'skaile_reconnect',

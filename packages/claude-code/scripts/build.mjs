@@ -1,9 +1,9 @@
-// Bundles the MCP server and the CLI, with every dependency, into dist/. Plugins install from
+// Bundles the MCP server, the CLI and the inbox hook, with every dependency, into dist/. Plugins install from
 // git with no `npm install`, so dist/ is committed; CI fails when it is stale.
 import { build } from 'esbuild'
 
 await build({
-  entryPoints: { 'mcp-server': 'src/mcp-server.ts', cli: 'src/cli-main.ts' },
+  entryPoints: { 'mcp-server': 'src/mcp-server.ts', cli: 'src/cli-main.ts', 'inbox-hook': 'src/inbox-hook.ts' },
   outdir: 'dist',
   outExtension: { '.js': '.cjs' },
   bundle: true,
