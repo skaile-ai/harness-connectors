@@ -20,6 +20,10 @@ export const NAME_LOOKUP_TIMEOUT_MS = 3_000
 export const MAX_INBOX_READ_CHARS = 60_000
 /** The most characters one short form (a question shown before) renders to; a test holds it to this. */
 export const MAX_BRIEF_CHARS = 1_300
+/** What `check_skaile_inbox` adds around the entries: the section headers and the "more" line. */
+const READ_FRAME_CHARS = 200
+/** What it adds per entry: the `---` separator and the blank line before it. */
+const ENTRY_FRAME_CHARS = 6
 /**
  * The ids an entry carries go into the channel tag's attributes and must stay exact for
  * `answer_skaile`; Skaile uses UUIDs. An id outside this set is refused rather than altered.
@@ -156,12 +160,12 @@ export class Inbox {
    * What `check_skaile_inbox` shows: the open questions (they stay until answered or closed) and
    * the unread messages, oldest first, up to `maxChars` of `describeEntry` text. The messages
    * returned are marked read; `more` counts what did not fit. An entry too large to sit next to the
-   * short forms of every other open question comes back as a cut copy (`cutAt`).
+   * short forms of the other open questions comes back as a cut copy (`cutAt`).
    */
   read(maxChars = MAX_INBOX_READ_CHARS): { questions: InboxEntry[]; messages: InboxEntry[]; more: number } {
-    let budget = maxChars
+    let budget = maxChars - READ_FRAME_CHARS
     const fits = (entry: InboxEntry) => {
-      const size = describeEntry(entry, { brief: entry.shown === true }).length
+      const size = describeEntry(entry, { brief: entry.shown === true }).length + ENTRY_FRAME_CHARS
       if (size > budget) {
         return false
       }
@@ -169,14 +173,16 @@ export class Inbox {
       return true
     }
     // Questions shown before come back in short form (at most MAX_BRIEF_CHARS), and any other entry
-    // is cut to fit next to the short forms of every other open question, so a long entry never
-    // blocks the rest: each read shows at least one new entry.
-    const target = maxChars - MAX_OPEN_ASKS * MAX_BRIEF_CHARS
+    // is cut to fit next to the short forms of the other open questions, so a long entry never
+    // blocks the rest: each read shows at least one new entry. With nothing else open, an entry
+    // keeps the whole budget.
+    const target = (self: number) =>
+      maxChars - READ_FRAME_CHARS - ENTRY_FRAME_CHARS - (this.asks.size - self) * (MAX_BRIEF_CHARS + ENTRY_FRAME_CHARS)
     const open = [...this.asks.values()].map((item) => item.entry)
     const questions: InboxEntry[] = []
     let skipped = 0
     for (const stored of open) {
-      const entry = stored.shown === true ? stored : fitTarget(stored, target)
+      const entry = stored.shown === true ? stored : fitTarget(stored, target(1))
       if (fits(entry)) {
         questions.push(entry)
       } else {
@@ -186,7 +192,7 @@ export class Inbox {
     const messages: InboxEntry[] = []
     let shown = 0
     for (; shown < this.messages.length; shown += 1) {
-      const entry = fitTarget(this.messages[shown] as InboxEntry, target)
+      const entry = fitTarget(this.messages[shown] as InboxEntry, target(0))
       if (!fits(entry)) {
         break
       }
@@ -262,11 +268,18 @@ function fitTarget(entry: InboxEntry, target: number): InboxEntry {
   if (describeEntry(entry).length <= target) {
     return entry
   }
-  let cut = Math.min(entry.text.length, target)
-  while (cut > 0 && describeEntry({ ...entry, cutAt: cut }).length > target) {
-    cut = Math.floor(cut / 2)
+  // The longest cut that still renders within `target` (the rendered size grows with the cut).
+  let low = 0
+  let high = Math.max(0, Math.min(entry.text.length - 1, target))
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2)
+    if (describeEntry({ ...entry, cutAt: middle }).length <= target) {
+      low = middle
+    } else {
+      high = middle - 1
+    }
   }
-  return { ...entry, cutAt: cut }
+  return { ...entry, cutAt: low }
 }
 
 /** The first `length` UTF-16 units of `text`, never splitting a surrogate pair. */

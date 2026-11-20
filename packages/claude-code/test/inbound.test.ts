@@ -275,22 +275,43 @@ describe('robustness', () => {
     expect(one.text).toContain('Too long to show whole here')
     expect(one.text).toContain('> later note')
     expect(one.text).not.toContain('more did not fit')
-    expect(one.text.length).toBeLessThanOrEqual(MAX_INBOX_READ_CHARS + 1_000)
+    expect(one.text.length).toBeLessThanOrEqual(MAX_INBOX_READ_CHARS)
     expect(inbox.counts().messages).toBe(0)
+  })
+
+  it('shows a lone entry that renders between the old cut target and the budget whole', async () => {
+    const { connection, events } = await setup('websocket')
+    const lines = `${'x'.repeat(31)}\n`.repeat(1_000)
+    server.sendHarness(connection, 'sess-ops', lines)
+    await server.until(() => events.length === 1)
+    const one = await call('check_skaile_inbox')
+    expect(one.text).toContain(`> ${'x'.repeat(31)}\n`.repeat(1_000))
+    expect(one.text).not.toContain('Too long to show whole here')
+  })
+
+  it('cuts an entry to just within the target, not to half of it', async () => {
+    const { connection, events } = await setup('websocket')
+    server.sendHarness(connection, 'sess-ops', `${'x'.repeat(31)}\n`.repeat(1_000))
+    await server.until(() => events.length === 1)
+    const entry = inbox.read(30_000).messages[0] as InboxEntry
+    expect(entry.cutAt).toBeDefined()
+    expect(describeEntry(entry).length).toBeLessThanOrEqual(30_000 - 206)
+    expect(describeEntry(entry).length).toBeGreaterThan(30_000 - 206 - 40)
   })
 
   it('cuts only the copy a read returns: the stored question and its channel push stay whole', async () => {
     const { connection, events } = await setup('websocket')
+    server.askHarness(connection, 'sess-ops', 'small question')
     const text = nearlyWhole()
     const big = server.askHarness(connection, 'sess-ops', text)
-    await server.until(() => events.length === 1)
+    await server.until(() => events.length === 2)
     expect((await call('check_skaile_inbox')).text).toContain('Too long to show whole here')
     const stored = inbox.question(big.exchangeId)
     expect(stored?.cutAt).toBeUndefined()
     expect(stored?.shown).toBe(true)
     expect(describeEntry(stored as InboxEntry)).not.toContain('Too long to show whole here')
-    expect(events[0]?.content).not.toContain('Too long to show whole here')
-    expect(events[0]?.content.length).toBeGreaterThan(text.length)
+    expect(events[1]?.content).not.toContain('Too long to show whole here')
+    expect(events[1]?.content.length).toBeGreaterThan(text.length)
   })
 
   it('quotes a peer’s text so it cannot close the channel tag or pose as framing', async () => {
