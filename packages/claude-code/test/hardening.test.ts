@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   ASK_TIMEOUT_MS,
   ASK_WAKE_ALLOWANCE_MS,
+  MAX_INVALID_FRAMES,
   MAX_RETRY_AFTER_MS,
   SERVER_ASK_TIMEOUT_MS,
   SkaileClient,
@@ -462,6 +463,63 @@ describe.each(['websocket', 'long-poll'] as const)('an oversize server frame ove
       expect(live?.closed).toBeNull()
       expect(client.getStatus()).toMatchObject({ state: 'connected', transport })
       expect(server.connections).toHaveLength(1)
+    } finally {
+      await server.stop()
+    }
+  })
+})
+
+describe.each(['websocket', 'long-poll'] as const)('a flood of undecodable server frames over %s', (transport) => {
+  it(`answers at most ${MAX_INVALID_FRAMES} with an error, then drops the connection and reconnects`, async () => {
+    const server = await new FakeServer({ agents: { [TOKEN]: { agentId: 'ra_1' } } }).start()
+    try {
+      const client = new SkaileClient({
+        config: { apiUrl: server.url, transport },
+        tokens: new MemoryTokenStore(TOKEN),
+        backoffBaseMs: 20,
+        backoffMaxMs: 50,
+      })
+      clients.push(client)
+      await client.ensureConnected()
+      const live = server.live('ra_1')
+      // Sent back to back, so over long-poll they arrive in one GET answer.
+      for (let i = 0; i < 5_000; i++) {
+        live?.sendRaw('1')
+      }
+      await server.until(() => server.connections.length >= 2, 5_000)
+      await client.ensureConnected()
+      const errors = live?.received.filter((f) => f.type === 'error' && f.code === 'invalid_frame').length ?? 0
+      expect(errors).toBeGreaterThan(0)
+      expect(errors).toBeLessThanOrEqual(MAX_INVALID_FRAMES)
+      expect(client.getStatus()).toMatchObject({ state: 'connected', transport })
+    } finally {
+      await server.stop()
+    }
+  })
+
+  it('keeps the connection while the undecodable frames stay under the cap', async () => {
+    const server = await new FakeServer({ agents: { [TOKEN]: { agentId: 'ra_1' } } }).start()
+    try {
+      const client = new SkaileClient({
+        config: { apiUrl: server.url, transport },
+        tokens: new MemoryTokenStore(TOKEN),
+        backoffBaseMs: 20,
+        backoffMaxMs: 50,
+      })
+      clients.push(client)
+      await client.ensureConnected()
+      const live = server.live('ra_1')
+      for (let i = 0; i < MAX_INVALID_FRAMES; i++) {
+        live?.sendRaw('1')
+      }
+      await server.until(
+        () =>
+          (live?.received.filter((f) => f.type === 'error' && f.code === 'invalid_frame').length ?? 0) ===
+          MAX_INVALID_FRAMES,
+        5_000,
+      )
+      expect(server.connections).toHaveLength(1)
+      expect(client.getStatus()).toMatchObject({ state: 'connected', transport })
     } finally {
       await server.stop()
     }

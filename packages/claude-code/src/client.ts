@@ -16,7 +16,7 @@ import {
 import type { Config } from './config.js'
 import { describeError, SkaileError } from './errors.js'
 import type { TokenStore } from './token-store.js'
-import { openLongPoll } from './transport/long-poll.js'
+import { CLOSE_CONNECTION_LOST, openLongPoll } from './transport/long-poll.js'
 import { OpenError, type OpenTransport, type Transport, type TransportKind } from './transport/types.js'
 import { openWebSocket } from './transport/websocket.js'
 import { CLIENT_VERSION, HARNESS_KIND } from './version.js'
@@ -94,12 +94,20 @@ type Live = {
   lastSentAt: number
   since: Date
   heartbeat: ReturnType<typeof setInterval> | null
+  /** Frames from the server that did not decode, each answered with an `error`. */
+  invalidFrames: number
 }
 
 /** A server's `retryAfterMs` is honoured up to this; a larger (or corrupt) value would overflow the timer. */
 export const MAX_RETRY_AFTER_MS = 3_600_000
 /** Frames kept from before the `welcome` was processed; a server has no reason to send more. */
 const MAX_EARLY_FRAMES = 100
+/**
+ * Undecodable server frames one connection answers with an `error` before it is dropped. A server
+ * that sends more is broken: one long-poll answer can carry ~2M tiny elements, and replying to
+ * each would turn one bounded response into ~20k `POST`s.
+ */
+export const MAX_INVALID_FRAMES = 100
 
 /**
  * How long the token must be refused without a break before it counts as one to replace. The
@@ -475,6 +483,7 @@ export class SkaileClient {
       lastSentAt: now,
       since: new Date(now),
       heartbeat: null,
+      invalidFrames: 0,
     }
     this.startHeartbeat(this.live)
     // The token was accepted. The backoff resets only once the connection has stayed up (endLive).
@@ -675,6 +684,12 @@ export class SkaileClient {
     live.lastReceivedAt = Date.now()
     const parsed = parseHarnessChannelFrame(raw, live.maxFrameBytes)
     if (!parsed.ok) {
+      live.invalidFrames += 1
+      if (live.invalidFrames > MAX_INVALID_FRAMES) {
+        this.log(`more than ${MAX_INVALID_FRAMES} undecodable frames from Skaile; dropping the connection`)
+        this.endLive(live, CLOSE_CONNECTION_LOST, 'connection_lost')
+        return
+      }
       this.sendFrame(live, {
         type: 'error',
         id: randomUUID(),
@@ -733,20 +748,35 @@ export class SkaileClient {
         })
         return
       }
-      case 'send':
-        this.deliver({
+      case 'send': {
+        const delivered = this.deliver({
           type: 'send',
           sessionId: frame.sessionId,
           text: frame.text,
           ...(frame.exchangeId ? { exchangeId: frame.exchangeId } : {}),
         })
+        if (delivered) {
+          this.sendFrame(live, {
+            type: 'ack',
+            id: randomUUID(),
+            replyTo: frame.id,
+            ...(frame.exchangeId ? { exchangeId: frame.exchangeId } : {}),
+          })
+          return
+        }
+        // Dropped: say so, so the sending session does not report it as delivered.
         this.sendFrame(live, {
-          type: 'ack',
+          type: 'error',
           id: randomUUID(),
           replyTo: frame.id,
           ...(frame.exchangeId ? { exchangeId: frame.exchangeId } : {}),
+          code: 'peer_offline',
+          message: this.onInbound
+            ? 'Claude Code could not take this message (an unusable id); it was not delivered.'
+            : 'This Claude Code plugin cannot take messages from Skaile.',
         })
         return
+      }
       case 'hello':
       case 'peers':
         this.sendFrame(live, {

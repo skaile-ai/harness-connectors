@@ -62,6 +62,14 @@ export class FakeConnection {
     this.transmit(JSON.stringify(frame))
   }
 
+  /** Sends text as one frame as is, valid or not (a broken or hostile server). */
+  sendRaw(json: string): void {
+    if (this.closed) {
+      return
+    }
+    this.transmit(json)
+  }
+
   close(code: number, reason: string): void {
     if (this.closed) {
       return
