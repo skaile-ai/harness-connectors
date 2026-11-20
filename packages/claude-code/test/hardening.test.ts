@@ -3,7 +3,8 @@ import { readFile } from 'node:fs/promises'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import type { HarnessChannelFrame } from '@skaile/harness-protocol'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
+import { WebSocketServer } from 'ws'
 import {
   ASK_TIMEOUT_MS,
   ASK_WAKE_ALLOWANCE_MS,
@@ -16,7 +17,12 @@ import { isSupportedNodeVersion, MIN_NODE_VERSION } from '../src/node-version.js
 import { describePeer } from '../src/peers.js'
 import { openLongPoll } from '../src/transport/long-poll.js'
 import { splitPollBatch } from '../src/transport/poll-batch.js'
-import { OpenError, type OpenTransport, type TransportEvents } from '../src/transport/types.js'
+import {
+  MAX_INBOUND_MESSAGE_BYTES,
+  OpenError,
+  type OpenTransport,
+  type TransportEvents,
+} from '../src/transport/types.js'
 import { openWebSocket } from '../src/transport/websocket.js'
 import { FakeServer } from './fake-server.js'
 import { MemoryTokenStore, TOKEN } from './helpers.js'
@@ -465,6 +471,49 @@ describe.each(['websocket', 'long-poll'] as const)('an oversize server frame ove
     } finally {
       await server.stop()
     }
+  })
+})
+
+describe('the WebSocket inbound cap', () => {
+  it('delivers a message of exactly the cap, and drops the connection with 1009 on one byte more', async () => {
+    // A hostile server: one message at the cap, then one over it.
+    const server = createServer((_req, res) => res.writeHead(404).end())
+    const wss = new WebSocketServer({ server })
+    onTestFinished(async () => {
+      for (const socket of wss.clients) {
+        socket.terminate()
+      }
+      wss.close()
+      server.closeAllConnections()
+      await new Promise((resolve) => server.close(resolve))
+    })
+    const serverSaw = new Promise<number>((resolve) => {
+      wss.on('connection', (socket) => {
+        socket.on('close', (code) => resolve(code))
+        socket.once('message', () => {
+          socket.send('a'.repeat(MAX_INBOUND_MESSAGE_BYTES))
+          socket.send('b'.repeat(MAX_INBOUND_MESSAGE_BYTES + 1))
+        })
+      })
+    })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const apiUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+    const frames: string[] = []
+    const closed = new Promise<void>((resolve) => {
+      void openWebSocket({
+        apiUrl,
+        token: TOKEN,
+        firstFrame: { type: 'ping', id: 'p' },
+        events: { onFrame: (raw) => frames.push(raw), onClose: () => resolve() },
+      })
+    })
+    // The client closes with 1009 (message too big). It stops reading at once, so it never sees the
+    // server's echo and reports the close locally as 1006; the 1009 is what the server receives.
+    expect(await serverSaw).toBe(1009)
+    await closed
+    expect(frames).toHaveLength(1)
+    expect(frames[0]).toHaveLength(MAX_INBOUND_MESSAGE_BYTES)
+    expect(frames[0]?.startsWith('a')).toBe(true)
   })
 })
 
