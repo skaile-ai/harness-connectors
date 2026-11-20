@@ -148,6 +148,11 @@ There are two ways the questions reach Claude:
   a claude.ai login (not an API key or a third-party provider), and where managed settings apply,
   an admin must set `channelsEnabled: true`. Checked against the Claude Code 2.1.322 CLI; the
   desktop app was not checked.
+
+  > **Warning:** do not run Claude Code with development channels on in a permissive permission
+  > mode (`auto` or `bypassPermissions`). A linked Skaile agent's text starts a turn in a session
+  > that has Bash and Edit, so in those modes it could run commands and change files without you
+  > confirming each step.
 - **Inbox (always on).** Without channels, questions and messages wait in the plugin. On your
   next prompt a hook tells Claude how many are waiting, and Claude reads them with
   `check_skaile_inbox`. Claude does not see them while it is idle and you type nothing.

@@ -81,7 +81,7 @@ describe.each(['websocket', 'long-poll'] as const)('over %s', (transport) => {
     expect(ack).toMatchObject({ exchangeId: (ask as { exchangeId: string }).exchangeId })
   })
 
-  it('answers server pings, declines server asks with peer_offline, and acks server sends', async () => {
+  it('without an inbox: answers server pings, declines server asks and sends with peer_offline', async () => {
     await setup()
     const c = client(new MemoryTokenStore(TOKEN), { transport })
     await c.ensureConnected()
@@ -97,7 +97,8 @@ describe.each(['websocket', 'long-poll'] as const)('over %s', (transport) => {
       expect.arrayContaining([
         expect.objectContaining({ type: 'pong', replyTo: 'p1' }),
         expect.objectContaining({ type: 'error', replyTo: 'a1', exchangeId: 'x-in', code: 'peer_offline' }),
-        expect.objectContaining({ type: 'ack', replyTo: 's1' }),
+        // Nothing took the message, so it is not acknowledged as delivered.
+        expect.objectContaining({ type: 'error', replyTo: 's1', code: 'peer_offline' }),
       ]),
     )
   })
