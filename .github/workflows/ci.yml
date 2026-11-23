@@ -1,6 +1,6 @@
 name: CI
 
-# Pull requests only: the repository is private, so every run costs minutes.
+# Pull requests only. The repository is public.
 on:
   pull_request:
 
