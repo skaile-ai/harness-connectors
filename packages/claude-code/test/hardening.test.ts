@@ -8,6 +8,7 @@ import { WebSocketServer } from 'ws'
 import {
   ASK_TIMEOUT_MS,
   ASK_WAKE_ALLOWANCE_MS,
+  MAX_REPLIES_PER_MINUTE,
   MAX_RETRY_AFTER_MS,
   SERVER_ASK_TIMEOUT_MS,
   SkaileClient,
@@ -24,7 +25,7 @@ import {
   type TransportEvents,
 } from '../src/transport/types.js'
 import { openWebSocket } from '../src/transport/websocket.js'
-import { FakeServer } from './fake-server.js'
+import { type FakeConnection, FakeServer } from './fake-server.js'
 import { MemoryTokenStore, TOKEN } from './helpers.js'
 
 const servers: Server[] = []
@@ -514,6 +515,66 @@ describe('the WebSocket inbound cap', () => {
     expect(frames).toHaveLength(1)
     expect(frames[0]).toHaveLength(MAX_INBOUND_MESSAGE_BYTES)
     expect(frames[0]?.startsWith('a')).toBe(true)
+  })
+})
+
+const FLOODS: [string, string][] = [
+  ['undecodable', '1'],
+  ['wrong-direction', '{"type":"peers","id":"p"}'],
+  ['ping', '{"type":"ping","id":"p"}'],
+]
+
+describe.each(['websocket', 'long-poll'] as const)('a flood of server frames over %s', (transport) => {
+  async function connected() {
+    const server = await new FakeServer({ agents: { [TOKEN]: { agentId: 'ra_1' } } }).start()
+    const client = new SkaileClient({
+      config: { apiUrl: server.url, transport },
+      tokens: new MemoryTokenStore(TOKEN),
+      backoffBaseMs: 20,
+      backoffMaxMs: 50,
+    })
+    clients.push(client)
+    await client.ensureConnected()
+    const live = server.live('ra_1')
+    if (!live) {
+      throw new Error('no live connection')
+    }
+    return { server, client, live }
+  }
+  const replies = (live: FakeConnection) => live.received.filter((f) => f.type === 'error' || f.type === 'pong').length
+
+  it.each(FLOODS)(
+    `%s frames: at most ${MAX_REPLIES_PER_MINUTE} replies, then the connection is dropped and reconnects`,
+    async (_kind, raw) => {
+      const { server, client, live } = await connected()
+      try {
+        // Sent back to back, so over long-poll they arrive in one GET answer.
+        for (let i = 0; i < 5_000; i++) {
+          live.sendRaw(raw)
+        }
+        await server.until(() => server.connections.length >= 2, 5_000)
+        await client.ensureConnected()
+        expect(replies(live)).toBeGreaterThan(0)
+        expect(replies(live)).toBeLessThanOrEqual(MAX_REPLIES_PER_MINUTE)
+        expect(client.getStatus()).toMatchObject({ state: 'connected', transport })
+      } finally {
+        await server.stop()
+      }
+    },
+  )
+
+  it('keeps the connection while the replies stay within the budget', async () => {
+    const { server, client, live } = await connected()
+    try {
+      for (let i = 0; i < MAX_REPLIES_PER_MINUTE; i++) {
+        live.sendRaw('1')
+      }
+      await server.until(() => replies(live) === MAX_REPLIES_PER_MINUTE, 5_000)
+      expect(server.connections).toHaveLength(1)
+      expect(client.getStatus()).toMatchObject({ state: 'connected', transport })
+    } finally {
+      await server.stop()
+    }
   })
 })
 
