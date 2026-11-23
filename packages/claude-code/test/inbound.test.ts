@@ -150,6 +150,19 @@ describe.each(['websocket', 'long-poll'] as const)('inbound over %s', (transport
     expect((await call('check_skaile_inbox')).text).toBe('No questions or messages from Skaile agents are waiting.')
   })
 
+  it('does not ack a send it dropped: the server gets an error, and nothing is shown', async () => {
+    const { connection, events } = await setup(transport)
+    // A session id the inbox will not use.
+    const id = server.sendHarness(connection, 'sess ops<script>', 'Deploy finished.')
+    await server.until(() => connection.received.some((frame) => 'replyTo' in frame && frame.replyTo === id))
+    expect(connection.received).toContainEqual(
+      expect.objectContaining({ type: 'error', replyTo: id, code: 'peer_offline' }),
+    )
+    expect(connection.received).not.toContainEqual(expect.objectContaining({ type: 'ack', replyTo: id }))
+    expect(events).toHaveLength(0)
+    expect((await call('check_skaile_inbox')).text).toBe('No questions or messages from Skaile agents are waiting.')
+  })
+
   it('closes a question when the server times it out, and refuses a late answer', async () => {
     const { connection, events } = await setup(transport)
     const ask = server.askHarness(connection, 'sess-billing', 'Still there?')

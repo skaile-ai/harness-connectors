@@ -16,7 +16,7 @@ import {
 import type { Config } from './config.js'
 import { describeError, SkaileError } from './errors.js'
 import type { TokenStore } from './token-store.js'
-import { openLongPoll } from './transport/long-poll.js'
+import { CLOSE_CONNECTION_LOST, openLongPoll } from './transport/long-poll.js'
 import { OpenError, type OpenTransport, type Transport, type TransportKind } from './transport/types.js'
 import { openWebSocket } from './transport/websocket.js'
 import { CLIENT_VERSION, HARNESS_KIND } from './version.js'
@@ -94,12 +94,23 @@ type Live = {
   lastSentAt: number
   since: Date
   heartbeat: ReturnType<typeof setInterval> | null
+  /** Replies sent to server frames in the current minute window, and when that window began. */
+  replies: number
+  replyWindowStart: number
 }
 
 /** A server's `retryAfterMs` is honoured up to this; a larger (or corrupt) value would overflow the timer. */
 export const MAX_RETRY_AFTER_MS = 3_600_000
 /** Frames kept from before the `welcome` was processed; a server has no reason to send more. */
 const MAX_EARLY_FRAMES = 100
+/**
+ * Replies (`pong`, `ack`, `error`) one connection sends to server frames per minute before it is
+ * dropped. A server that asks for more is broken or hostile: one long-poll answer can carry ~2M
+ * tiny elements, and replying to each would turn one bounded response into ~20k `POST`s. Legitimate
+ * traffic stays far below: the server allows 30 `ask`/`send` a minute per sender, plus its pings.
+ */
+export const MAX_REPLIES_PER_MINUTE = 600
+const REPLY_WINDOW_MS = 60_000
 
 /**
  * How long the token must be refused without a break before it counts as one to replace. The
@@ -343,6 +354,28 @@ export class SkaileClient {
     live.transport.send(frame)
   }
 
+  /**
+   * Sends a reply to a server frame, within the connection's reply budget. Over it, the server is
+   * not one to answer: the connection is dropped (and reconnects with backoff) instead.
+   */
+  private reply(live: Live, frame: HarnessChannelFrame): void {
+    if (this.live !== live) {
+      return
+    }
+    const now = Date.now()
+    if (now - live.replyWindowStart >= REPLY_WINDOW_MS) {
+      live.replyWindowStart = now
+      live.replies = 0
+    }
+    live.replies += 1
+    if (live.replies > MAX_REPLIES_PER_MINUTE) {
+      this.log(`Skaile asked for more than ${MAX_REPLIES_PER_MINUTE} replies in a minute; dropping the connection`)
+      this.endLive(live, CLOSE_CONNECTION_LOST, 'connection_lost')
+      return
+    }
+    this.sendFrame(live, frame)
+  }
+
   // ── Connecting ──────────────────────────────────────────────────────────────
 
   /** One connect attempt; concurrent callers share it. */
@@ -475,6 +508,8 @@ export class SkaileClient {
       lastSentAt: now,
       since: new Date(now),
       heartbeat: null,
+      replies: 0,
+      replyWindowStart: now,
     }
     this.startHeartbeat(this.live)
     // The token was accepted. The backoff resets only once the connection has stayed up (endLive).
@@ -675,7 +710,7 @@ export class SkaileClient {
     live.lastReceivedAt = Date.now()
     const parsed = parseHarnessChannelFrame(raw, live.maxFrameBytes)
     if (!parsed.ok) {
-      this.sendFrame(live, {
+      this.reply(live, {
         type: 'error',
         id: randomUUID(),
         code: parsed.code,
@@ -687,7 +722,7 @@ export class SkaileClient {
     const frame = parsed.frame
     switch (frame.type) {
       case 'ping':
-        this.sendFrame(live, { type: 'pong', id: randomUUID(), replyTo: frame.id })
+        this.reply(live, { type: 'pong', id: randomUUID(), replyTo: frame.id })
         return
       case 'pong':
         return
@@ -700,7 +735,7 @@ export class SkaileClient {
         this.onError(live, frame)
         return
       case 'answer': {
-        this.sendFrame(live, { type: 'ack', id: randomUUID(), replyTo: frame.id, exchangeId: frame.exchangeId })
+        this.reply(live, { type: 'ack', id: randomUUID(), replyTo: frame.id, exchangeId: frame.exchangeId })
         const pending = this.settle(this.pendingAsks, frame.exchangeId)
         if (pending) {
           pending.resolve(frame)
@@ -717,11 +752,11 @@ export class SkaileClient {
           text: frame.text,
         }
         if (this.deliver(event)) {
-          this.sendFrame(live, { type: 'ack', id: randomUUID(), replyTo: frame.id, exchangeId: frame.exchangeId })
+          this.reply(live, { type: 'ack', id: randomUUID(), replyTo: frame.id, exchangeId: frame.exchangeId })
           return
         }
         // Declined at once, so the asking session does not wait for nothing.
-        this.sendFrame(live, {
+        this.reply(live, {
           type: 'error',
           id: randomUUID(),
           replyTo: frame.id,
@@ -733,23 +768,38 @@ export class SkaileClient {
         })
         return
       }
-      case 'send':
-        this.deliver({
+      case 'send': {
+        const delivered = this.deliver({
           type: 'send',
           sessionId: frame.sessionId,
           text: frame.text,
           ...(frame.exchangeId ? { exchangeId: frame.exchangeId } : {}),
         })
-        this.sendFrame(live, {
-          type: 'ack',
+        if (delivered) {
+          this.reply(live, {
+            type: 'ack',
+            id: randomUUID(),
+            replyTo: frame.id,
+            ...(frame.exchangeId ? { exchangeId: frame.exchangeId } : {}),
+          })
+          return
+        }
+        // Dropped: say so, so the sending session does not report it as delivered.
+        this.reply(live, {
+          type: 'error',
           id: randomUUID(),
           replyTo: frame.id,
           ...(frame.exchangeId ? { exchangeId: frame.exchangeId } : {}),
+          code: 'peer_offline',
+          message: this.onInbound
+            ? 'Claude Code could not take this message (an unusable id); it was not delivered.'
+            : 'This Claude Code plugin cannot take messages from Skaile.',
         })
         return
+      }
       case 'hello':
       case 'peers':
-        this.sendFrame(live, {
+        this.reply(live, {
           type: 'error',
           id: randomUUID(),
           replyTo: frame.id,
