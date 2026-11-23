@@ -128,7 +128,7 @@ export const STABLE_CONNECTION_MS = 60_000
  * dead-peer drop), reconnects with capped exponential backoff, and correlates requests with
  * their answers. It does NOT reconnect by itself after `replaced`, `revoked` or
  * `unsupported_version`: two copies of the plugin would otherwise take turns forever, and a
- * revoked or outdated client cannot succeed. `reconnect()` (the `/skaile reconnect` command)
+ * revoked or outdated client cannot succeed. `reconnect()` (the `/skaile:skaile reconnect` command)
  * and a newly stored token lift that.
  */
 export class SkaileClient {
@@ -232,7 +232,7 @@ export class SkaileClient {
     throw this.notConnectedError()
   }
 
-  /** `/skaile reconnect`: drops the current connection (if any), re-reads the token and connects. */
+  /** `/skaile:skaile reconnect`: drops the current connection (if any), re-reads the token and connects. */
   async reconnect(): Promise<ConnectionStatus> {
     if (this.closed) {
       return this.status
@@ -650,7 +650,7 @@ export class SkaileClient {
 
   private stop(reason: StopReason, message: string, token: string | null): void {
     this.clearRetry()
-    // A new token (or /skaile reconnect) starts afresh: its own refusal clock and the first delay.
+    // A new token (or /skaile:skaile reconnect) starts afresh: its own refusal clock and the first delay.
     this.resetUnauthorized()
     this.attempt = 0
     this.stoppedToken = token

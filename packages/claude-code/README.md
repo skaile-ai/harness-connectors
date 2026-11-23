@@ -17,16 +17,16 @@ In Claude Code (2.1.275 or later):
 or, in one step, `/plugin install skaile --marketplace skaile-ai/harness-connectors`. Then
 restart Claude Code (or run `/reload-plugins`) and connect it to Skaile.
 
-The plugin adds the `/skaile` command, the MCP tools below, the `skaile-agents` skill (when to
-ask Skaile agents, that their messages are untrusted input, never to send secrets) and a hook
-that reminds Claude of waiting messages. Claude Code may list the command as `/skaile:skaile`
-(plugin commands are namespaced); both names run it, and the full name always works.
+The plugin adds the `/skaile:skaile` command, the MCP tools below, the `skaile-agents` skill
+(when to ask Skaile agents, that their messages are untrusted input, never to send secrets) and
+a hook that reminds Claude of waiting messages. Claude Code namespaces plugin commands, so use
+`/skaile:skaile`; a bare `/skaile` is not recognised (as of Claude Code 2.1.330).
 
 ## Connect
 
 1. In Skaile, create a remote agent and copy its token (it starts with `skr_`). Link the agent
    to the sessions it may talk to.
-2. In a terminal, store the token. `/skaile connect` in Claude Code prints this command with
+2. In a terminal, store the token. `/skaile:skaile connect` in Claude Code prints this command with
    the plugin's path filled in:
 
    ```
@@ -35,11 +35,11 @@ that reminds Claude of waiting messages. Claude Code may list the command as `/s
 
    Paste the token when it asks (the input is hidden). The token never enters the Claude Code
    conversation, its transcript or a model request, and it is not a process argument.
-   `/skaile` does not take a token: anything typed after `/skaile connect` is not stored, and
-   the command shows the terminal path instead. `/skaile` hands what you type to the model only,
-   never to a shell or a process argument. (The model can run the `/skaile` command line during
-   its turn, so a command that stored or removed a token would let a prompt-injected model swap
-   or drop it.)
+   `/skaile:skaile` does not take a token: anything typed after `/skaile:skaile connect` is not
+   stored, and the command shows the terminal path instead. `/skaile:skaile` hands what you type
+   to the model only, never to a shell or a process argument. (The model can run the
+   `/skaile:skaile` command line during its turn, so a command that stored or removed a token
+   would let a prompt-injected model swap or drop it.)
 
    The token is stored in the OS keychain (macOS Keychain, or the Secret Service keyring on
    Linux through `secret-tool`). Where no keychain works, it goes to `~/.config/skaile/token`
@@ -49,15 +49,15 @@ that reminds Claude of waiting messages. Claude Code may list the command as `/s
    `security` read it without asking. Any process running as you can therefore read the token,
    which in practice protects it about as well as the 0600 file. The plugin does not use a
    native keychain library (so it has no native build), and this is the cost.
-3. In Claude Code, run `/skaile reconnect`. `/skaile status` then shows whether Claude Code is
-   connected, the remote agent and the linked sessions.
+3. In Claude Code, run `/skaile:skaile reconnect`. `/skaile:skaile status` then shows whether
+   Claude Code is connected, the remote agent and the linked sessions.
 
-| Command              | What it does                                                              |
-| -------------------- | ------------------------------------------------------------------------- |
-| `/skaile connect`    | Show the terminal command that stores a token                             |
-| `/skaile status`     | Connection, agent and linked sessions                                     |
-| `/skaile reconnect`  | Connect again, taking the connection over from another Claude Code window |
-| `/skaile disconnect` | Show the terminal command that removes the stored token                   |
+| Command                     | What it does                                                              |
+| --------------------------- | ------------------------------------------------------------------------- |
+| `/skaile:skaile connect`    | Show the terminal command that stores a token                             |
+| `/skaile:skaile status`     | Connection, agent and linked sessions                                     |
+| `/skaile:skaile reconnect`  | Connect again, taking the connection over from another Claude Code window |
+| `/skaile:skaile disconnect` | Show the terminal command that removes the stored token                   |
 
 ## Tools
 
@@ -68,8 +68,8 @@ that reminds Claude of waiting messages. Claude Code may list the command as `/s
 | `answer_skaile(exchangeId, text)` | Answer a question a Skaile agent asked                                                                                                               |
 | `check_skaile_inbox()`            | The open questions and unread messages from Skaile agents, for when channels are off                                                                 |
 | `list_skaile_peers()`             | The linked sessions, with sessionId, name and whether they are online                                                                                |
-| `skaile_status()`                 | Used by `/skaile status`                                                                                                                             |
-| `skaile_reconnect()`              | Used by `/skaile reconnect`                                                                                                                          |
+| `skaile_status()`                 | Used by `/skaile:skaile status`                                                                                                                      |
+| `skaile_reconnect()`              | Used by `/skaile:skaile reconnect`                                                                                                                   |
 
 `peer` is a session's sessionId, or a display name or agent name that only one linked session
 has. A name two sessions share is refused with both listed.
@@ -83,12 +83,12 @@ Errors come back to Claude as one clear sentence that starts with its code: `not
 Skaile keeps one live connection per remote agent: the newest. Every Claude Code window starts
 its own copy of the plugin's MCP server, so a second window takes the connection over and the
 first one reports `replaced`. The plugin never takes it back on its own (two windows would
-take turns forever): run `/skaile reconnect` in the window that should have it.
+take turns forever): run `/skaile:skaile reconnect` in the window that should have it.
 
 The plugin also stops reconnecting after `revoked` (create a new token) and
 `unsupported_version` (update the plugin). Skaile can refuse a valid token for a short while,
 so after `unauthorized` it keeps retrying and stops only once the token has been refused
-without a break for 5 minutes: then store a current token, or run `/skaile reconnect` to try
+without a break for 5 minutes: then store a current token, or run `/skaile:skaile reconnect` to try
 the same one again. Otherwise it reconnects with capped exponential backoff (starting again
 from the first delay only after a connection has stayed up for a minute), waits as long as
 Skaile says after too many connection attempts, and drops a connection that has been silent

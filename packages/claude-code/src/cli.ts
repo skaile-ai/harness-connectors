@@ -4,9 +4,9 @@ import { isValidToken, type TokenStore } from './token-store.js'
 /**
  * The plugin's small CLI.
  *
- * - `cli.cjs command` is what `/skaile` runs, with no arguments: it prints, per subcommand, what
+ * - `cli.cjs command` is what `/skaile:skaile` runs, with no arguments: it prints, per subcommand, what
  *   the model should do next. The user's words reach the model in the command's prompt, never a
- *   shell or a process argument, so a token typed after `/skaile connect` stays out of argv.
+ *   shell or a process argument, so a token typed after `/skaile:skaile connect` stays out of argv.
  *   `command <subcommand>` gives that one line. It never stores, replaces or removes a token:
  *   the command's `allowed-tools` stay in force for the model's whole turn, so a prompt-injected
  *   model could run it too.
@@ -33,10 +33,10 @@ export type CliIo = {
 }
 
 const USAGE = `Usage:
-  /skaile connect           show the terminal command that stores a Skaile remote-agent token
-  /skaile status            show whether Claude Code is connected, the agent and the linked sessions
-  /skaile reconnect         reconnect (takes the connection over from another Claude Code session)
-  /skaile disconnect        show the terminal command that removes the stored token`
+  /skaile:skaile connect     show the terminal command that stores a Skaile remote-agent token
+  /skaile:skaile status      show whether Claude Code is connected, the agent and the linked sessions
+  /skaile:skaile reconnect   reconnect (takes the connection over from another Claude Code session)
+  /skaile:skaile disconnect  show the terminal command that removes the stored token`
 
 export async function runCli(argv: string[], io: CliIo): Promise<number> {
   const [mode] = argv
@@ -51,7 +51,7 @@ export async function runCli(argv: string[], io: CliIo): Promise<number> {
       return 1
     }
     const stored = await io.tokens.write(token)
-    io.write(`Stored the Skaile token in ${stored.detail}. In Claude Code, run /skaile reconnect to connect.\n`)
+    io.write(`Stored the Skaile token in ${stored.detail}. In Claude Code, run /skaile:skaile reconnect to connect.\n`)
     return 0
   }
   if (mode === 'disconnect') {
@@ -80,7 +80,7 @@ export async function runCli(argv: string[], io: CliIo): Promise<number> {
 }
 
 const connectLine = (io: CliIo) =>
-  `the user runs this in a terminal and pastes the token when asked:\n\n  node "${io.cliPath}" connect\n\nThen /skaile reconnect here.`
+  `the user runs this in a terminal and pastes the token when asked:\n\n  node "${io.cliPath}" connect\n\nThen /skaile:skaile reconnect here.`
 
 /**
  * Anything the user typed that may hold a Skaile token, valid or not (`skr_test`, `token=skr_…`,
@@ -89,18 +89,18 @@ const connectLine = (io: CliIo) =>
 const looksLikeToken = (word: string) => /skr_/i.test(word)
 
 const tokenAdvice = (io: CliIo) =>
-  `Nothing was stored: /skaile does not take a token. To store one, ${connectLine(io)} Tell the user exactly that and show the command, without repeating what they typed. If it was a real token, it is now in this conversation, so they can create a new one in Skaile.`
+  `Nothing was stored: /skaile:skaile does not take a token. To store one, ${connectLine(io)} Tell the user exactly that and show the command, without repeating what they typed. If it was a real token, it is now in this conversation, so they can create a new one in Skaile.`
 
 const tokenReply = (io: CliIo) => `${tokenAdvice(io)}\n`
 
 const disconnectLine = (io: CliIo) =>
-  `the user runs this in a terminal:\n\n  node "${io.cliPath}" disconnect\n\nThen /skaile reconnect here, so this session drops its connection.`
+  `the user runs this in a terminal:\n\n  node "${io.cliPath}" disconnect\n\nThen /skaile:skaile reconnect here, so this session drops its connection.`
 
 function guide(io: CliIo): string {
   return [
-    `First: if anything the user typed after /skaile contains skr_ (in any case; a Skaile token), whatever the subcommand, or none: do not call any tool, not even skaile_status. ${tokenAdvice(io)}`,
+    `First: if anything the user typed after /skaile:skaile contains skr_ (in any case; a Skaile token), whatever the subcommand, or none: do not call any tool, not even skaile_status. ${tokenAdvice(io)}`,
     '',
-    'Otherwise, for each /skaile subcommand, do this:',
+    'Otherwise, for each /skaile:skaile subcommand, do this:',
     '',
     `- connect: to store a Skaile token, ${connectLine(io)} Tell the user exactly that and show the command. If they typed anything after connect, nothing was stored: answer as in the first rule.`,
     '- status (or nothing): call the skaile_status tool and show the user its result.',
@@ -114,7 +114,7 @@ function guide(io: CliIo): string {
 async function slashCommand(words: string[], io: CliIo): Promise<number> {
   const [sub, ...rest] = words
   // A token anywhere (bare, after status, …) gets the token reply, never the subcommand's line.
-  // /skaile itself runs `command` with no words (the user's words stay in the prompt), so for a
+  // /skaile:skaile itself runs `command` with no words (the user's words stay in the prompt), so for a
   // real user the guide's first rule is the guard; this covers a model that passes the words on.
   if (words.some(looksLikeToken)) {
     io.write(tokenReply(io))
@@ -146,7 +146,7 @@ async function slashCommand(words: string[], io: CliIo): Promise<number> {
       )
       return 0
     default:
-      io.write(`Unknown /skaile command. Show the user this:\n\n${USAGE}\n`)
+      io.write(`Unknown /skaile:skaile command. Show the user this:\n\n${USAGE}\n`)
       return 1
   }
 }

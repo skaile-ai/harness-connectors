@@ -15,7 +15,7 @@ function io(stdin: string, secretLine?: string) {
   return { value, out, tokens }
 }
 
-describe('the /skaile command', () => {
+describe('the /skaile:skaile command', () => {
   it('connect <token> stores nothing, never echoes it, and gives the terminal command', async () => {
     for (const args of [
       ['connect', TOKEN],
@@ -110,7 +110,7 @@ describe('the /skaile command', () => {
     expect(out.join('')).toContain('node "/plugin/dist/cli.cjs" disconnect')
   })
 
-  it('without arguments prints the guide for every subcommand, as /skaile runs it', async () => {
+  it('without arguments prints the guide for every subcommand, as /skaile:skaile runs it', async () => {
     const { value, out } = io('')
     expect(await runCli(['command'], value)).toBe(0)
     const text = out.join('')
@@ -119,8 +119,8 @@ describe('the /skaile command', () => {
     expect(text).toContain('call the skaile_status tool')
     expect(text).toContain('call the skaile_reconnect tool')
     expect(text).toMatch(/Usage:/)
-    // The token rule applies before any subcommand, so `/skaile skr_…` and `/skaile status skr_…` are covered.
-    expect(text).toMatch(/^First: if anything the user typed after \/skaile contains skr_/)
+    // The token rule applies before any subcommand, so `/skaile:skaile skr_…` and `/skaile:skaile status skr_…` are covered.
+    expect(text).toMatch(/^First: if anything the user typed after \/skaile:skaile contains skr_/)
     expect(text.split('Otherwise,')[0]).toMatch(
       /do not call any tool[\s\S]*connect"? ?[\s\S]*create a new one in Skaile/,
     )
@@ -137,7 +137,7 @@ describe('the /skaile command', () => {
       `!\`node "${root}/dist/cli.cjs" command\``,
     ])
     expect(md).not.toMatch(/printf/)
-    // The prompt defers to the CLI's token rule, so `/skaile skr_…` never reads as "none means status".
+    // The prompt defers to the CLI's token rule, so `/skaile:skaile skr_…` never reads as "none means status".
     expect(md).toMatch(/contains\s+`skr_` in any case \(a token\), follow the CLI's first rule and call no tool/)
   })
 
@@ -183,12 +183,46 @@ describe('set-api-url', () => {
     expect(out.join('')).toMatch(/Saved https:\/\/skaile\.corp\.example/)
   })
 
-  it('is not reachable from the /skaile command', async () => {
+  it('is not reachable from the /skaile:skaile command', async () => {
     const { value, out } = io('')
     value.saveApiUrl = async () => {
       throw new Error('must not be called')
     }
     expect(await runCli(['command', 'set-api-url', 'https://evil.example'], value)).toBe(1)
-    expect(out.join('')).toMatch(/Unknown \/skaile command/)
+    expect(out.join('')).toMatch(/Unknown \/skaile:skaile command/)
+  })
+})
+
+describe('the command name in what users and the model read', () => {
+  // Claude Code namespaces plugin commands: only /skaile:skaile runs this plugin's command, and a
+  // bare /skaile is "Unknown command". The README sentence that says so is the one allowed mention.
+  const bare = /(?<![\w./\\-])\/skaile(?![\w:/\\-])/
+
+  it('never gives the bare /skaile in the source, the command prompt or the READMEs', async () => {
+    const { readFile, readdir } = await import('node:fs/promises')
+    const src = new URL('../src/', import.meta.url)
+    const files = [
+      ...(await readdir(src)).filter((name) => name.endsWith('.ts')).map((name) => new URL(name, src)),
+      new URL('../commands/skaile.md', import.meta.url),
+      new URL('../README.md', import.meta.url),
+      new URL('../../../README.md', import.meta.url),
+    ]
+    const hits: string[] = []
+    for (const file of files) {
+      const lines = (await readFile(file, 'utf8')).split('\n')
+      lines.forEach((line, i) => {
+        if (bare.test(line) && !line.includes('a bare `/skaile` is not recognised')) {
+          hits.push(`${file.pathname.split('/packages/').pop()}:${i + 1}: ${line.trim()}`)
+        }
+      })
+    }
+    expect(files.length).toBeGreaterThan(5)
+    expect(hits).toEqual([])
+  })
+
+  it('catches a bare /skaile, so the check above is not vacuous', () => {
+    expect(bare.test('run /skaile reconnect')).toBe(true)
+    expect(bare.test('run /skaile:skaile reconnect')).toBe(false)
+    expect(bare.test('~/.config/skaile/token')).toBe(false)
   })
 })
