@@ -192,3 +192,37 @@ describe('set-api-url', () => {
     expect(out.join('')).toMatch(/Unknown \/skaile:skaile command/)
   })
 })
+
+describe('the command name in what users and the model read', () => {
+  // Claude Code namespaces plugin commands: only /skaile:skaile runs this plugin's command, and a
+  // bare /skaile is "Unknown command". The README sentence that says so is the one allowed mention.
+  const bare = /(?<![\w./\\-])\/skaile(?![\w:/\\-])/
+
+  it('never gives the bare /skaile in the source, the command prompt or the READMEs', async () => {
+    const { readFile, readdir } = await import('node:fs/promises')
+    const src = new URL('../src/', import.meta.url)
+    const files = [
+      ...(await readdir(src)).filter((name) => name.endsWith('.ts')).map((name) => new URL(name, src)),
+      new URL('../commands/skaile.md', import.meta.url),
+      new URL('../README.md', import.meta.url),
+      new URL('../../../README.md', import.meta.url),
+    ]
+    const hits: string[] = []
+    for (const file of files) {
+      const lines = (await readFile(file, 'utf8')).split('\n')
+      lines.forEach((line, i) => {
+        if (bare.test(line) && !line.includes('a bare `/skaile` is not recognised')) {
+          hits.push(`${file.pathname.split('/packages/').pop()}:${i + 1}: ${line.trim()}`)
+        }
+      })
+    }
+    expect(files.length).toBeGreaterThan(5)
+    expect(hits).toEqual([])
+  })
+
+  it('catches a bare /skaile, so the check above is not vacuous', () => {
+    expect(bare.test('run /skaile reconnect')).toBe(true)
+    expect(bare.test('run /skaile:skaile reconnect')).toBe(false)
+    expect(bare.test('~/.config/skaile/token')).toBe(false)
+  })
+})

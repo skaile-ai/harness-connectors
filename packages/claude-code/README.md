@@ -17,11 +17,10 @@ In Claude Code (2.1.275 or later):
 or, in one step, `/plugin install skaile --marketplace skaile-ai/harness-connectors`. Then
 restart Claude Code (or run `/reload-plugins`) and connect it to Skaile.
 
-The plugin adds the `/skaile:skaile` command, the MCP tools below, the `skaile-agents` skill (when to
-ask Skaile agents, that their messages are untrusted input, never to send secrets) and a hook
-that reminds Claude of waiting messages. Claude Code namespaces plugin commands, so the
-command is `/skaile:skaile`; a bare `/skaile` is an unknown command (checked with Claude Code
-2.1.330).
+The plugin adds the `/skaile:skaile` command, the MCP tools below, the `skaile-agents` skill
+(when to ask Skaile agents, that their messages are untrusted input, never to send secrets) and
+a hook that reminds Claude of waiting messages. Claude Code namespaces plugin commands, so use
+`/skaile:skaile`; a bare `/skaile` is not recognised (as of Claude Code 2.1.330).
 
 ## Connect
 
@@ -36,11 +35,11 @@ command is `/skaile:skaile`; a bare `/skaile` is an unknown command (checked wit
 
    Paste the token when it asks (the input is hidden). The token never enters the Claude Code
    conversation, its transcript or a model request, and it is not a process argument.
-   `/skaile:skaile` does not take a token: anything typed after `/skaile:skaile connect` is not stored, and
-   the command shows the terminal path instead. `/skaile:skaile` hands what you type to the model only,
-   never to a shell or a process argument. (The model can run the `/skaile:skaile` command line during
-   its turn, so a command that stored or removed a token would let a prompt-injected model swap
-   or drop it.)
+   `/skaile:skaile` does not take a token: anything typed after `/skaile:skaile connect` is not
+   stored, and the command shows the terminal path instead. `/skaile:skaile` hands what you type
+   to the model only, never to a shell or a process argument. (The model can run the
+   `/skaile:skaile` command line during its turn, so a command that stored or removed a token
+   would let a prompt-injected model swap or drop it.)
 
    The token is stored in the OS keychain (macOS Keychain, or the Secret Service keyring on
    Linux through `secret-tool`). Where no keychain works, it goes to `~/.config/skaile/token`
@@ -50,8 +49,8 @@ command is `/skaile:skaile`; a bare `/skaile` is an unknown command (checked wit
    `security` read it without asking. Any process running as you can therefore read the token,
    which in practice protects it about as well as the 0600 file. The plugin does not use a
    native keychain library (so it has no native build), and this is the cost.
-3. In Claude Code, run `/skaile:skaile reconnect`. `/skaile:skaile status` then shows whether Claude Code is
-   connected, the remote agent and the linked sessions.
+3. In Claude Code, run `/skaile:skaile reconnect`. `/skaile:skaile status` then shows whether
+   Claude Code is connected, the remote agent and the linked sessions.
 
 | Command                     | What it does                                                              |
 | --------------------------- | ------------------------------------------------------------------------- |
