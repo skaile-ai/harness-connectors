@@ -309,11 +309,11 @@ describe('reconnect rules', () => {
     }, 5_000)
     expect(server.connectAttempts.length).toBeGreaterThanOrEqual(3)
     expect(server.connections).toHaveLength(0)
-    // The same token is not tried again by a tool call; only a new token or /skaile reconnect does.
+    // The same token is not tried again by a tool call; only a new token or /skaile:skaile reconnect does.
     const attempts = server.connectAttempts.length
     const refused = await rejection(c.listPeers())
     expect(refused.code).toBe('unauthorized')
-    expect(refused.message).toMatch(/\/skaile reconnect to try this one again/)
+    expect(refused.message).toMatch(/\/skaile:skaile reconnect to try this one again/)
     expect(server.connectAttempts).toHaveLength(attempts)
   })
 
@@ -383,7 +383,7 @@ describe('reconnect rules', () => {
     const c = client(tokens)
     const error = await rejection(c.listPeers())
     expect(error.code).toBe('no_token')
-    expect(error.message).toMatch(/\/skaile connect/)
+    expect(error.message).toMatch(/\/skaile:skaile connect/)
     tokens.token = TOKEN
     expect(await c.listPeers()).toEqual(PEERS)
   })

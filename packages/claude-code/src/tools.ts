@@ -76,7 +76,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'skaile_reconnect',
     description:
-      'Reconnect to Skaile with the stored token. Use when the user runs /skaile reconnect (also after storing a token): it takes the connection over from another Claude Code session.',
+      'Reconnect to Skaile with the stored token. Use when the user runs /skaile:skaile reconnect (also after storing a token): it takes the connection over from another Claude Code session.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
 ]
@@ -170,7 +170,7 @@ async function findPeer(client: SkaileClient, query: string) {
   return cached ?? resolvePeer(await client.listPeers(), query)
 }
 
-/** The status as the user sees it in `/skaile status`. Lists peers only when connected. */
+/** The status as the user sees it in `/skaile:skaile status`. Lists peers only when connected. */
 export async function statusText(client: SkaileClient): Promise<string> {
   const status = client.getStatus()
   switch (status.state) {

@@ -1,5 +1,5 @@
 /**
- * The bundle targets Node 20.3+ (it uses `AbortSignal.any`), but `.mcp.json` and `/skaile` run
+ * The bundle targets Node 20.3+ (it uses `AbortSignal.any`), but `.mcp.json` and `/skaile:skaile` run
  * whatever `node` is first on PATH. Imported first by each entry point, so an older Node fails
  * at start with one clear line instead of a TypeError later, mid-connection.
  */
