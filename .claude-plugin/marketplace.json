@@ -8,7 +8,7 @@
       "name": "skaile",
       "source": "./packages/claude-code",
       "description": "Link Claude Code to your Skaile agents: ask them, tell them, answer their questions, and list them.",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "author": { "name": "Skaile", "url": "https://skaile.ai" },
       "homepage": "https://github.com/skaile-ai/harness-connectors/tree/main/packages/claude-code",
       "repository": "https://github.com/skaile-ai/harness-connectors",

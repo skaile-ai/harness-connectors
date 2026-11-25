@@ -1,6 +1,6 @@
 {
   "name": "@skaile/claude-code-plugin",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Claude Code plugin that links Claude Code to Skaile agents over the harness channel.",
   "license": "Apache-2.0",
