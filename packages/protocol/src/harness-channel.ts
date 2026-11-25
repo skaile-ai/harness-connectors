@@ -1,5 +1,5 @@
 // Copied from skaile-ai/platform backend/libs/types/src/harness-channel.types.ts
-// at 24911b512252619f73ac9c13160ac998a0fbca38 (protocol v1.1, spec docs/protocol/harness-channel-v1.md).
+// at eeb0154f9678ce124c53411a156a5012ed5aebc9 (protocol v1.1, spec docs/protocol/harness-channel-v1.md).
 // Keep this file a verbatim copy so a diff against the platform shows protocol drift;
 // change it only when the platform's copy changes. harness-channel-v1.schema.json beside it is the
 // platform's published JSON Schema from the same commit; a test checks the two still agree.
@@ -111,7 +111,8 @@ export const harnessChannelHelloFrameSchema = z.object({
     .string()
     .min(1)
     .max(HARNESS_CHANNEL_MAX_CLIENT_LABEL_LENGTH)
-    .regex(/^[^\p{Cc}]+$/u)
+    // No control, format or bidi characters: a person reads it, and those reorder or split the text.
+    .regex(/^[^\p{Cc}\p{Cf}\p{Zl}\p{Zp}]+$/u)
     .optional(),
 })
 

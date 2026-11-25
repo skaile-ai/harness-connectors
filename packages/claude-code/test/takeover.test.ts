@@ -199,6 +199,7 @@ describe('the client label', () => {
   it('names the folder and the process, without control characters, within the limit', () => {
     expect(clientLabelFor('/home/ada/repos/billing', 42)).toBe('Claude Code in billing (pid 42)')
     expect(clientLabelFor('/tmp/a\nb', 1)).toBe('Claude Code in ab (pid 1)')
+    expect(clientLabelFor('/tmp/a\u202Eb\u2028c', 1)).toBe('Claude Code in abc (pid 1)')
     expect(clientLabelFor(`/${'x'.repeat(300)}`, 1)).toHaveLength(128)
   })
 

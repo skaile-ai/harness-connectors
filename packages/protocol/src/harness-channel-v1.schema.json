@@ -34,7 +34,7 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 128,
-          "pattern": "^[^\\p{Cc}]+$"
+          "pattern": "^[^\\p{Cc}\\p{Cf}\\p{Zl}\\p{Zp}]+$"
         }
       },
       "required": [

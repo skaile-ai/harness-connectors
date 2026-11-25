@@ -145,8 +145,8 @@ export const STABLE_CONNECTION_MS = 60_000
 
 /** How a person tells this Claude Code session apart: the folder it runs in and its process id. */
 export function clientLabelFor(cwd: string, pid: number): string {
-  // biome-ignore lint/suspicious/noControlCharactersInRegex: the server refuses control characters
-  const folder = basename(cwd).replace(/[\u0000-\u001f\u007f-\u009f]/g, '') || cwd.slice(0, 1)
+  // The server refuses control, format, bidi and line-separator characters in the label.
+  const folder = basename(cwd).replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, '') || cwd.slice(0, 1)
   return `Claude Code in ${folder} (pid ${pid})`.slice(0, HARNESS_CHANNEL_MAX_CLIENT_LABEL_LENGTH)
 }
 
