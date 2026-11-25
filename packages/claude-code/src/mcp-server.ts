@@ -1,7 +1,7 @@
 // First: checks the Node version before anything else loads.
 import './node-version.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
-import { SkaileClient } from './client.js'
+import { clientLabelFor, SkaileClient } from './client.js'
 import { loadConfig, readSavedApiUrl } from './config.js'
 import { Inbox } from './inbox.js'
 import { clearInboxState, writeInboxState } from './inbox-state.js'
@@ -9,8 +9,8 @@ import { createMcpServer, PeerNames, pushToChannel } from './server.js'
 import { createTokenStore } from './token-store.js'
 
 /**
- * The plugin's stdio MCP server. Claude Code starts one per session; it holds the one
- * connection to Skaile, serves the tools and pushes Skaile's questions and messages into the
+ * The plugin's stdio MCP server. Claude Code starts one per session; once a tool needs it, it
+ * holds the one connection to Skaile, serves the tools and pushes Skaile's questions and messages into the
  * session. stdout is the MCP channel, so logs go to stderr.
  */
 async function main(): Promise<void> {
@@ -37,6 +37,7 @@ async function main(): Promise<void> {
       tokens: createTokenStore(),
       log,
       onInbound: (event) => inbox.accept(event),
+      clientLabel: clientLabelFor(process.cwd(), owner),
     })
   } catch (error) {
     // Serve the tools anyway, so the model can tell the user what is wrong.
@@ -61,8 +62,9 @@ async function main(): Promise<void> {
   process.on('SIGTERM', shutdown)
   process.on('SIGINT', shutdown)
 
+  // No connect here: the first Skaile tool call connects, so a session that never uses Skaile
+  // never displaces the connection of one that does.
   await server.connect(new StdioServerTransport())
-  client?.start()
 }
 
 main().catch((error: unknown) => {

@@ -28,6 +28,7 @@ export function makeClient(
     askTimeoutMs?: number
     unauthorizedGiveUpMs?: number
     stableAfterMs?: number
+    clientLabel?: string
     onInbound?: (event: InboundEvent) => boolean
   } = {},
 ): SkaileClient {
@@ -42,5 +43,6 @@ export function makeClient(
     ...(options.unauthorizedGiveUpMs === undefined ? {} : { unauthorizedGiveUpMs: options.unauthorizedGiveUpMs }),
     ...(options.stableAfterMs === undefined ? {} : { stableAfterMs: options.stableAfterMs }),
     ...(options.onInbound ? { onInbound: options.onInbound } : {}),
+    ...(options.clientLabel ? { clientLabel: options.clientLabel } : {}),
   })
 }

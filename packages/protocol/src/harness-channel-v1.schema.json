@@ -26,6 +26,15 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 64
+        },
+        "takeover": {
+          "type": "boolean"
+        },
+        "clientLabel": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[^\\p{Cc}]+$"
         }
       },
       "required": [
@@ -246,7 +255,8 @@
             "rate_limited",
             "timeout",
             "invalid_frame",
-            "payload_too_large"
+            "payload_too_large",
+            "in_use"
           ]
         },
         "message": {

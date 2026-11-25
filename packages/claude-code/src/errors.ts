@@ -1,4 +1,4 @@
-import type { HarnessChannelErrorCode } from '@skaile/harness-protocol'
+import { HARNESS_CHANNEL_PROTOCOL_VERSION, type HarnessChannelErrorCode } from '@skaile/harness-protocol'
 
 /** Server codes plus the ones this client raises itself. */
 export type SkaileErrorCode =
@@ -32,11 +32,13 @@ export function describeError(code: SkaileErrorCode, detail?: string, retryAfter
     case 'revoked':
       return 'revoked: this agent was revoked in Skaile, so the connection is closed. The user needs a new remote-agent token from Skaile; /skaile:skaile connect shows how to store it.'
     case 'unsupported_version':
-      return 'unsupported_version: Skaile does not accept this plugin’s protocol version (1.0). The user needs to update the Skaile Claude Code plugin.'
+      return `unsupported_version: Skaile does not accept this plugin’s protocol version (${HARNESS_CHANNEL_PROTOCOL_VERSION}). The user needs to update the Skaile Claude Code plugin.`
     case 'unauthorized':
       return 'unauthorized: Skaile refused the token (it was rotated, or its owner lost access to the agent). The user stores a current token (/skaile:skaile connect shows how), or runs /skaile:skaile reconnect to try this one again.'
     case 'replaced':
-      return 'replaced: another Claude Code session took over this agent’s Skaile connection (an agent has one live connection, the newest). Run /skaile:skaile reconnect in this session to take it back.'
+      return 'replaced: another Claude Code session took over this agent’s Skaile connection (an agent has one live connection, and /skaile:skaile reconnect takes it over). Run /skaile:skaile reconnect in this session to take it back.'
+    case 'in_use':
+      return `in_use: ${detail ?? 'another session holds this agent’s Skaile connection.'} This session did not take it over. If this session should have it, the user runs /skaile:skaile reconnect here (the other session then stops getting Skaile messages).`
     case 'no_token':
       return 'not_connected: no Skaile token is stored. The user runs /skaile:skaile connect, which shows the terminal command that stores a token.'
     case 'not_connected':

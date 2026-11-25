@@ -76,14 +76,23 @@ has. A name two sessions share is refused with both listed.
 
 Errors come back to Claude as one clear sentence that starts with its code: `not_linked`,
 `peer_offline`, `revoked`, `unsupported_version`, `unauthorized`, `rate_limited`, `timeout`,
-`replaced` and `not_connected`.
+`in_use`, `replaced` and `not_connected`.
 
 ## One connection per agent
 
-Skaile keeps one live connection per remote agent: the newest. Every Claude Code window starts
-its own copy of the plugin's MCP server, so a second window takes the connection over and the
-first one reports `replaced`. The plugin never takes it back on its own (two windows would
-take turns forever): run `/skaile:skaile reconnect` in the window that should have it.
+Skaile keeps one live connection per remote agent. Every Claude Code window starts its own copy
+of the plugin's MCP server, but a copy connects only when Claude first calls a Skaile tool, so a
+window that never uses Skaile leaves the connection alone. A window that does call a tool while
+another window holds the connection gets `in_use`, which names the window that holds it (its
+folder and process id), and that window stays connected. To move the connection, run
+`/skaile:skaile reconnect` in the window that should have it: it takes the connection over, and
+the other window reports `replaced`. The plugin never takes the connection over on its own (two
+windows would take turns forever). The one exception is its own connection: when that drops,
+the plugin keeps retrying through `in_use` for up to three minutes, since Skaile may not have
+noticed yet that the old connection is gone.
+
+This needs a Skaile server that speaks protocol 1.1. An older server ignores the takeover
+request, so there the newest connection still wins.
 
 The plugin also stops reconnecting after `revoked` (create a new token) and
 `unsupported_version` (update the plugin). Skaile can refuse a valid token for a short while,
