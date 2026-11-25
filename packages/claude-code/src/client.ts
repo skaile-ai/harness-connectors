@@ -53,7 +53,7 @@ export type StopReason =
 
 /** The status before the first connect. */
 export const IDLE_MESSAGE =
-  'Not connected yet: the plugin connects on the first Skaile tool call, so a session that never uses Skaile leaves the connection to the one that does.'
+  'Not connected yet: the plugin connects on the first Skaile tool call that talks to Skaile (asking, sending, answering or listing peers), so a session that never uses Skaile leaves the connection to the one that does. Until then it receives no questions or messages from Skaile agents.'
 
 export type ConnectionStatus =
   | { state: 'connecting'; attempt: number }
@@ -177,8 +177,11 @@ export class SkaileClient {
   private readonly clientLabel: string | undefined
 
   private status: ConnectionStatus = { state: 'stopped', reason: 'idle', message: IDLE_MESSAGE }
-  /** Set by reconnect() for its own attempt only: no other connect takes the connection over. */
-  private takeoverNext = false
+  /**
+   * Set by reconnect(): its attempts, retries included, ask to take the connection over until one
+   * is welcomed or the client stops. No other connect takes it over.
+   */
+  private takeoverPending = false
   /** When (epoch ms) this client's own connection last dropped; the server may still count it live. */
   private droppedAt: number | null = null
   private live: Live | null = null
@@ -229,7 +232,10 @@ export class SkaileClient {
     return this.lastPeers
   }
 
-  /** Starts connecting in the background, without taking over. Never throws. */
+  /**
+   * Starts connecting in the background, without taking over. Never throws. The plugin itself
+   * does not call it: it connects on the first Skaile tool call.
+   */
   start(): void {
     void this.connect().catch(() => undefined)
   }
@@ -285,7 +291,7 @@ export class SkaileClient {
     this.resetUnauthorized()
     this.stoppedToken = null
     this.droppedAt = null
-    this.takeoverNext = true
+    this.takeoverPending = true
     await this.connect().catch(() => undefined)
     return this.status
   }
@@ -293,6 +299,7 @@ export class SkaileClient {
   /** Stops for good (MCP server shutdown). */
   close(): void {
     this.closed = true
+    this.takeoverPending = false
     this.clearRetry()
     this.dropLive(new SkaileError('not_connected', describeError('not_connected', 'shutting down')))
     this.status = { state: 'stopped', reason: 'closed', message: 'closed' }
@@ -412,9 +419,12 @@ export class SkaileClient {
     if (live.replies > MAX_REPLIES_PER_MINUTE) {
       this.log(`Skaile asked for more than ${MAX_REPLIES_PER_MINUTE} replies in a minute; dropping the connection`)
       this.endLive(live, CLOSE_CONNECTION_LOST, 'connection_lost')
-      // The server still counts the dropped connection live (a long-poll one for 60 s), and it
-      // is this client's own: the next attempt replaces it instead of meeting it as `in_use`.
-      this.takeoverNext = this.status.state === 'retrying'
+      // Over long-poll the server still counts the dropped connection live for up to 60 s, and it
+      // is this client's own: the next attempts replace it instead of meeting it as `in_use`. A
+      // WebSocket close is seen at once, so there a takeover could only displace another session.
+      if (live.transport.kind === 'long-poll' && this.status.state === 'retrying') {
+        this.takeoverPending = true
+      }
       return
     }
     this.sendFrame(live, frame)
@@ -437,7 +447,14 @@ export class SkaileClient {
   }
 
   private async connectOnce(): Promise<void> {
-    const token = await this.tokens.read()
+    let token: string | null
+    try {
+      token = await this.tokens.read()
+    } catch (error) {
+      // A takeover asked for by a reconnect that never reached the server must not fire later.
+      this.takeoverPending = false
+      throw error
+    }
     if (this.closed) {
       return
     }
@@ -445,8 +462,7 @@ export class SkaileClient {
       this.stop('no_token', describeError('no_token'), null)
       return
     }
-    const takeover = this.takeoverNext
-    this.takeoverNext = false
+    const takeover = this.takeoverPending
     this.attempt += 1
     this.status = { state: 'connecting', attempt: this.attempt }
     const generation = ++this.generation
@@ -564,6 +580,7 @@ export class SkaileClient {
     this.resetUnauthorized()
     this.stoppedToken = null
     this.droppedAt = null
+    this.takeoverPending = false
     this.status = {
       state: 'connected',
       transport: transport.kind,
@@ -722,6 +739,7 @@ export class SkaileClient {
     this.resetUnauthorized()
     this.attempt = 0
     this.droppedAt = null
+    this.takeoverPending = false
     this.stoppedToken = token
     this.status = { state: 'stopped', reason, message }
     this.log(`stopped: ${message}`)

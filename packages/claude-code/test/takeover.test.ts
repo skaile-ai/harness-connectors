@@ -5,8 +5,7 @@ import type { HarnessChannelHelloFrame } from '@skaile/harness-protocol'
 import { afterEach, describe, expect, it } from 'vitest'
 import { clientLabelFor } from '../src/client.js'
 import { SkaileError } from '../src/errors.js'
-import { Inbox } from '../src/inbox.js'
-import { createMcpServer } from '../src/server.js'
+import { startPlugin } from '../src/plugin.js'
 import { statusText } from '../src/tools.js'
 import { FakeServer } from './fake-server.js'
 import { MemoryTokenStore, makeClient, TOKEN } from './helpers.js'
@@ -38,27 +37,36 @@ describe.each(['websocket', 'long-poll'] as const)('explicit takeover over %s', 
     }).start()
   }
 
-  function client(label: string) {
-    const c = makeClient(server.url, new MemoryTokenStore(TOKEN), { transport, clientLabel: label })
+  function client(label: string, tokens = new MemoryTokenStore(TOKEN)) {
+    const c = makeClient(server.url, tokens, { transport, clientLabel: label })
     cleanups.push(() => c.close())
     return c
   }
 
   const hellos = () => server.connections.map((c) => c.received[0] as HarnessChannelHelloFrame)
 
-  it('a started MCP server does not connect; the first tool call does', async () => {
+  it('a started plugin does not connect; the first tool call does', async () => {
     await setup()
-    const skaile = client('Claude Code in billing (pid 1)')
-    const inbox = new Inbox({ resolveName: async () => undefined, deliver: () => undefined })
-    const mcp = createMcpServer({ client: skaile, inbox })
     const claude = new Client({ name: 'claude-code-stand-in', version: '1.0.0' })
     const [clientSide, serverSide] = InMemoryTransport.createLinkedPair()
-    await mcp.connect(serverSide)
+    const plugin = await startPlugin({
+      env: { SKAILE_TRANSPORT: transport },
+      savedApiUrl: server.url,
+      tokens: new MemoryTokenStore(TOKEN),
+      transport: serverSide,
+      owner: 2_000_000_001,
+      cwd: '/home/ada/billing',
+      log: () => undefined,
+    })
     await claude.connect(clientSide)
     cleanups.push(async () => {
-      inbox.dispose()
       await claude.close()
+      await plugin.shutdown()
     })
+    const skaile = plugin.client
+    if (!skaile) {
+      throw new Error('expected a client')
+    }
 
     await pause(200)
     expect(server.connectAttempts).toHaveLength(0)
@@ -69,7 +77,10 @@ describe.each(['websocket', 'long-poll'] as const)('explicit takeover over %s', 
     const peers = await claude.callTool({ name: 'list_skaile_peers', arguments: {} })
     expect(JSON.stringify(peers.content)).toContain('Billing')
     expect(skaile.getStatus()).toMatchObject({ state: 'connected' })
-    expect(hellos()[0]).toMatchObject({ protocolVersion: '1.1', clientLabel: 'Claude Code in billing (pid 1)' })
+    expect(hellos()[0]).toMatchObject({
+      protocolVersion: '1.1',
+      clientLabel: 'Claude Code in billing (pid 2000000001)',
+    })
     expect(hellos()[0]?.takeover).toBeUndefined()
   })
 
@@ -118,6 +129,37 @@ describe.each(['websocket', 'long-poll'] as const)('explicit takeover over %s', 
     await server.until(() => working.getStatus().state === 'stopped')
     expect(working.getStatus()).toMatchObject({ reason: 'replaced' })
     expect(await newcomer.listPeers()).toHaveLength(1)
+  })
+
+  it('reconnect keeps asking to take over through a passing failure', async () => {
+    await setup()
+    const working = client('Claude Code in billing (pid 1)')
+    await working.ensureConnected()
+    const newcomer = client('Claude Code in notes (pid 2)')
+    server.refuseNext.push({ status: 429, code: 'rate_limited', retryAfterMs: 50 })
+
+    await newcomer.reconnect()
+    await server.until(() => newcomer.getStatus().state === 'connected', 5_000)
+    expect(hellos().at(-1)).toMatchObject({ takeover: true, clientLabel: 'Claude Code in notes (pid 2)' })
+    await server.until(() => working.getStatus().state === 'stopped')
+    expect(working.getStatus()).toMatchObject({ reason: 'replaced' })
+  })
+
+  it('a reconnect that found no token does not take over on a later tool call', async () => {
+    await setup()
+    const working = client('Claude Code in billing (pid 1)')
+    await working.ensureConnected()
+    const holder = server.live('ra_1')
+    const tokens = new MemoryTokenStore(null)
+    const newcomer = client('Claude Code in notes (pid 2)', tokens)
+    expect(await newcomer.reconnect()).toMatchObject({ state: 'stopped', reason: 'no_token' })
+
+    tokens.token = TOKEN
+    expect((await newcomer.listPeers().catch((error: SkaileError) => error)) as SkaileError).toMatchObject({
+      code: 'in_use',
+    })
+    expect(hellos().every((hello) => hello.takeover === undefined)).toBe(true)
+    expect(server.live('ra_1')).toBe(holder)
   })
 
   it('a plain connect succeeds once the holder has gone', async () => {

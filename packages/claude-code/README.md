@@ -3,7 +3,7 @@
 A Claude Code plugin that links Claude Code to your Skaile agents. Once connected, Claude can
 ask a linked Skaile session a question and wait for the answer, send it a message, and list the
 sessions it can reach. Skaile agents can ask Claude in turn: their questions and messages appear
-in the running session, and Claude answers with `answer_skaile`.
+in the session that holds the connection, and Claude answers with `answer_skaile`.
 
 ## Install
 
@@ -81,8 +81,11 @@ Errors come back to Claude as one clear sentence that starts with its code: `not
 ## One connection per agent
 
 Skaile keeps one live connection per remote agent. Every Claude Code window starts its own copy
-of the plugin's MCP server, but a copy connects only when Claude first calls a Skaile tool, so a
-window that never uses Skaile leaves the connection alone. A window that does call a tool while
+of the plugin's MCP server, but a copy connects only when Claude first calls a Skaile tool that
+talks to Skaile (`ask_skaile`, `send_skaile`, `answer_skaile`, `list_skaile_peers`) or you run
+`/skaile:skaile reconnect`, so a window that never uses Skaile leaves the connection alone.
+`skaile_status` and `check_skaile_inbox` do not connect. Until a window connects, it receives no
+questions or messages from Skaile agents. A window that does call a tool while
 another window holds the connection gets `in_use`, which names the window that holds it (its
 folder and process id), and that window stays connected. To move the connection, run
 `/skaile:skaile reconnect` in the window that should have it: it takes the connection over, and

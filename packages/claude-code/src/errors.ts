@@ -38,7 +38,7 @@ export function describeError(code: SkaileErrorCode, detail?: string, retryAfter
     case 'replaced':
       return 'replaced: another Claude Code session took over this agent’s Skaile connection (an agent has one live connection, and /skaile:skaile reconnect takes it over). Run /skaile:skaile reconnect in this session to take it back.'
     case 'in_use':
-      return `in_use: ${detail ?? 'another session holds this agent’s Skaile connection.'} This session did not take it over. If this session should have it, the user runs /skaile:skaile reconnect here (the other session then stops getting Skaile messages).`
+      return `in_use: ${detail ?? 'another session holds this agent’s Skaile connection.'} This session did not take it over. Tell the user; do not reconnect on your own. If this session should have it, the user runs /skaile:skaile reconnect here (the other session then stops getting Skaile messages).`
     case 'no_token':
       return 'not_connected: no Skaile token is stored. The user runs /skaile:skaile connect, which shows the terminal command that stores a token.'
     case 'not_connected':
