@@ -60,7 +60,7 @@ describe.each(['websocket', 'long-poll'] as const)('over %s', (transport) => {
     expect(connection?.requestUrl).not.toContain('skr_')
     expect(connection?.received[0]).toMatchObject({
       type: 'hello',
-      protocolVersion: '1.0',
+      protocolVersion: '1.1',
       harnessKind: 'claude-code',
       clientVersion: '0.1.0',
     })
@@ -200,7 +200,7 @@ describe('reconnect rules', () => {
     const first = client()
     await first.ensureConnected()
     const second = client()
-    await second.ensureConnected()
+    await second.reconnect()
     await server.until(() => first.getStatus().state === 'stopped')
     expect(first.getStatus()).toMatchObject({ state: 'stopped', reason: 'replaced' })
     await new Promise((resolve) => setTimeout(resolve, 300))

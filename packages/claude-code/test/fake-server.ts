@@ -5,10 +5,13 @@ import {
   HARNESS_CHANNEL_CLOSE_CODES,
   HARNESS_CHANNEL_CONNECT_PATH,
   HARNESS_CHANNEL_POLL_PATH,
+  HARNESS_CHANNEL_PROTOCOL_VERSION,
   type HarnessChannelAskFrame,
   type HarnessChannelErrorCode,
   type HarnessChannelFrame,
+  type HarnessChannelHelloFrame,
   type HarnessChannelPeer,
+  harnessChannelHelloNeedsTakeover,
   negotiateHarnessChannelVersion,
   parseHarnessChannelFrame,
 } from '@skaile/harness-protocol'
@@ -17,7 +20,8 @@ import { WebSocket, WebSocketServer } from 'ws'
 /**
  * An in-process server that speaks harness channel protocol v1 over both transports
  * (`/harness/connect` WebSocket, `/harness/poll` long-poll), with the session behaviour the
- * client relies on: one live connection per agent (the newest replaces the older with 4409),
+ * client relies on: one live connection per agent (a 1.1 `hello` without `takeover` is refused with
+ * `in_use` while one is live; otherwise the newcomer replaces the older with 4409),
  * token refusal at connect, `peers`, `ask`/`send` routing and heartbeat pings.
  */
 
@@ -43,6 +47,7 @@ export class FakeConnection {
   readonly received: HarnessChannelFrame[] = []
   readonly sent: HarnessChannelFrame[] = []
   agent: FakeAgent | null = null
+  hello: HarnessChannelHelloFrame | null = null
   welcomed = false
   closed: { code: number; reason: string } | null = null
 
@@ -101,6 +106,8 @@ export class FakeServer {
   peers: HarnessChannelPeer[]
   /** Exchanges a Skaile session opened with an `ask` to the harness, still waiting for the answer. */
   readonly openExchanges = new Set<string>()
+  /** Agents whose last connection died without the server noticing yet: it still counts as live. */
+  readonly ghosts = new Set<string>()
   private active = new Map<string, FakeConnection>()
   private readonly http: Server
   private readonly wss = new WebSocketServer({ noServer: true })
@@ -355,7 +362,23 @@ export class FakeServer {
         return
       }
       const agent = this.options.agents[token] as FakeAgent
+      const holder = this.live(agent.agentId)
+      const held = holder !== undefined || this.ghosts.has(agent.agentId)
+      if (held && frame.takeover !== true && harnessChannelHelloNeedsTakeover(frame.protocolVersion)) {
+        const label = holder?.hello?.clientLabel ?? 'an earlier connection'
+        connection.send({
+          type: 'error',
+          id: randomUUID(),
+          replyTo: frame.id,
+          code: 'in_use',
+          message: `This remote agent is already connected from ${label}. Connect with takeover to replace that connection.`,
+        })
+        connection.close(HARNESS_CHANNEL_CLOSE_CODES.in_use, 'in_use')
+        return
+      }
+      this.ghosts.delete(agent.agentId)
       connection.agent = agent
+      connection.hello = frame
       connection.welcomed = true
       const previous = this.active.get(agent.agentId)
       this.active.set(agent.agentId, connection)
@@ -364,7 +387,7 @@ export class FakeServer {
         type: 'welcome',
         id: randomUUID(),
         replyTo: frame.id,
-        protocolVersion: '1.0',
+        protocolVersion: HARNESS_CHANNEL_PROTOCOL_VERSION,
         remoteAgentId: agent.agentId,
         heartbeatIntervalMs: this.options.heartbeatIntervalMs ?? 30_000,
         maxFrameBytes: 262_144,

@@ -1,5 +1,5 @@
 // Copied from skaile-ai/platform backend/libs/types/src/harness-channel.types.ts
-// at 6c902a74857f51eafcf7029c1d310ecbc0d0a518 (protocol v1.0, spec docs/protocol/harness-channel-v1.md).
+// at eeb0154f9678ce124c53411a156a5012ed5aebc9 (protocol v1.1, spec docs/protocol/harness-channel-v1.md).
 // Keep this file a verbatim copy so a diff against the platform shows protocol drift;
 // change it only when the platform's copy changes. harness-channel-v1.schema.json beside it is the
 // platform's published JSON Schema from the same commit; a test checks the two still agree.
@@ -17,10 +17,19 @@ import { z } from 'zod'
  */
 
 /** The version this build speaks, `<major>.<minor>`. */
-export const HARNESS_CHANNEL_PROTOCOL_VERSION = '1.0'
+export const HARNESS_CHANNEL_PROTOCOL_VERSION = '1.1'
 
 /** Majors this build accepts in `hello`. Any other major gets `unsupported_version`. */
 export const HARNESS_CHANNEL_SUPPORTED_MAJORS: readonly number[] = [1]
+
+/**
+ * From this minor of major 1 on, a `hello` without `takeover: true` is refused with `in_use` while
+ * another connection of the agent is live. A 1.0 client still replaces the live one, as it always did.
+ */
+export const HARNESS_CHANNEL_EXPLICIT_TAKEOVER_MINOR = 1
+
+/** Upper bound on `hello.clientLabel`. */
+export const HARNESS_CHANNEL_MAX_CLIENT_LABEL_LENGTH = 128
 
 /** Upper bound on one serialized frame, in UTF-8 bytes. `welcome` may announce a lower one. */
 export const HARNESS_CHANNEL_MAX_FRAME_BYTES = 256 * 1024
@@ -57,7 +66,7 @@ export const HARNESS_CHANNEL_POLL_IDLE_TIMEOUT_MS = 60_000
 
 /**
  * WebSocket close codes the server ends a harness connection with. The close reason is the
- * key. `unauthorized`, `revoked` and `unsupported_version` follow an `error` frame with the same code.
+ * key. `unauthorized`, `revoked`, `unsupported_version` and `in_use` follow an `error` frame with the same code.
  */
 export const HARNESS_CHANNEL_CLOSE_CODES = {
   unsupported_version: 4400,
@@ -66,6 +75,7 @@ export const HARNESS_CHANNEL_CLOSE_CODES = {
   heartbeat_timeout: 4408,
   replaced: 4409,
   hello_timeout: 4410,
+  in_use: 4423,
 } as const
 export type HarnessChannelCloseReason = keyof typeof HARNESS_CHANNEL_CLOSE_CODES
 
@@ -83,6 +93,7 @@ export const harnessChannelErrorCodeSchema = z.enum([
   'timeout',
   'invalid_frame',
   'payload_too_large',
+  'in_use',
 ])
 export type HarnessChannelErrorCode = z.infer<typeof harnessChannelErrorCodeSchema>
 
@@ -93,6 +104,16 @@ export const harnessChannelHelloFrameSchema = z.object({
   /** Free string naming the harness (`claude-code`, `codex`, …). The server never branches on it. */
   harnessKind: z.string().min(1).max(64),
   clientVersion: z.string().min(1).max(64),
+  /** 1.1: replace the agent's live connection. Without it a 1.1 client is refused with `in_use` while one is live. */
+  takeover: z.boolean().optional(),
+  /** 1.1: how a person tells this client apart (e.g. the folder a session runs in); named to a refused newcomer. */
+  clientLabel: z
+    .string()
+    .min(1)
+    .max(HARNESS_CHANNEL_MAX_CLIENT_LABEL_LENGTH)
+    // No control, format or bidi characters: a person reads it, and those reorder or split the text.
+    .regex(/^[^\p{Cc}\p{Cf}\p{Zl}\p{Zp}]+$/u)
+    .optional(),
 })
 
 export const harnessChannelWelcomeFrameSchema = z.object({
@@ -269,6 +290,16 @@ export function negotiateHarnessChannelVersion(
     return { ok: false, code: 'unsupported_version' }
   }
   return { ok: true, version: HARNESS_CHANNEL_PROTOCOL_VERSION }
+}
+
+/**
+ * Whether a `hello` naming this `protocolVersion` (the client's own, not the negotiated one) must
+ * ask for `takeover` to replace a live connection. 1.0 clients predate the rule and the `in_use`
+ * code, so they keep "newest wins".
+ */
+export function harnessChannelHelloNeedsTakeover(requestedProtocolVersion: string): boolean {
+  const [major = 0, minor = 0] = requestedProtocolVersion.split('.').map(Number)
+  return major > 1 || (major === 1 && minor >= HARNESS_CHANNEL_EXPLICIT_TAKEOVER_MINOR)
 }
 
 /** The JSON Schema committed at `docs/protocol/harness-channel-v1.schema.json`. */

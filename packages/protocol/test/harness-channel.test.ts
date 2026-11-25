@@ -39,8 +39,8 @@ const frames: HarnessChannelFrame[] = [
 ]
 
 describe('harness channel protocol v1', () => {
-  it('is pinned to protocol 1.0', () => {
-    expect(HARNESS_CHANNEL_PROTOCOL_VERSION).toBe('1.0')
+  it('is pinned to protocol 1.1', () => {
+    expect(HARNESS_CHANNEL_PROTOCOL_VERSION).toBe('1.1')
     expect(HARNESS_CHANNEL_CLOSE_CODES.replaced).toBe(4409)
   })
 
@@ -78,7 +78,7 @@ describe('harness channel protocol v1', () => {
   })
 
   it('negotiates any minor of major 1 and refuses other majors', () => {
-    expect(negotiateHarnessChannelVersion('1.7')).toEqual({ ok: true, version: '1.0' })
+    expect(negotiateHarnessChannelVersion('1.7')).toEqual({ ok: true, version: '1.1' })
     expect(negotiateHarnessChannelVersion('2.0')).toEqual({ ok: false, code: 'unsupported_version' })
     expect(negotiateHarnessChannelVersion('x')).toEqual({ ok: false, code: 'unsupported_version' })
   })

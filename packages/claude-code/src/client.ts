@@ -1,8 +1,10 @@
 import { randomUUID } from 'node:crypto'
+import { basename } from 'node:path'
 import {
   HARNESS_CHANNEL_CLOSE_CODES,
   HARNESS_CHANNEL_HEARTBEAT_INTERVAL_MS,
   HARNESS_CHANNEL_HEARTBEAT_TIMEOUT_MS,
+  HARNESS_CHANNEL_MAX_CLIENT_LABEL_LENGTH,
   HARNESS_CHANNEL_MAX_FRAME_BYTES,
   HARNESS_CHANNEL_PROTOCOL_VERSION,
   type HarnessChannelAnswerFrame,
@@ -34,8 +36,24 @@ export const ASK_TIMEOUT_MS = SERVER_ASK_TIMEOUT_MS + 30_000 + ASK_WAKE_ALLOWANC
 /** After WebSocket was unreachable and long-poll worked, reconnects use long-poll for this long. */
 const PREFER_LONG_POLL_MS = 3_600_000
 
-/** Why the client stopped and will not reconnect on its own. */
-export type StopReason = 'replaced' | 'revoked' | 'unsupported_version' | 'unauthorized' | 'no_token' | 'closed'
+/**
+ * Why the client stopped and will not reconnect on its own. `idle`: it has not connected yet (it
+ * connects on the first tool call). `in_use`: another connection of the agent is live and this one
+ * did not ask to take over; the next tool call tries again.
+ */
+export type StopReason =
+  | 'idle'
+  | 'in_use'
+  | 'replaced'
+  | 'revoked'
+  | 'unsupported_version'
+  | 'unauthorized'
+  | 'no_token'
+  | 'closed'
+
+/** The status before the first connect. */
+export const IDLE_MESSAGE =
+  'Not connected yet: the plugin connects on the first Skaile tool call that talks to Skaile (asking, sending, answering or listing peers), so a session that never uses Skaile leaves the connection to the one that does. Until then it receives no questions or messages from Skaile agents.'
 
 export type ConnectionStatus =
   | { state: 'connecting'; attempt: number }
@@ -75,6 +93,8 @@ export type ClientOptions = {
   unauthorizedGiveUpMs?: number
   /** How long a connection must stay up before the backoff starts again from the first delay. */
   stableAfterMs?: number
+  /** Names this client to a newcomer the server refuses with `in_use` (see clientLabelFor). */
+  clientLabel?: string
   log?: (message: string) => void
 }
 
@@ -123,13 +143,22 @@ const MIN_UNAUTHORIZED_REFUSALS = 3
 /** A connection that stayed up this long resets the backoff; a shorter one keeps it growing. */
 export const STABLE_CONNECTION_MS = 60_000
 
+/** How a person tells this Claude Code session apart: the folder it runs in and its process id. */
+export function clientLabelFor(cwd: string, pid: number): string {
+  // The server refuses control, format, bidi and line-separator characters in the label.
+  const folder = basename(cwd).replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, '') || cwd.slice(0, 1)
+  return `Claude Code in ${folder} (pid ${pid})`.slice(0, HARNESS_CHANNEL_MAX_CLIENT_LABEL_LENGTH)
+}
+
 /**
- * One connection to Skaile over the harness channel (protocol v1). Keeps it alive (heartbeat,
+ * One connection to Skaile over the harness channel (protocol v1.1). Keeps it alive (heartbeat,
  * dead-peer drop), reconnects with capped exponential backoff, and correlates requests with
- * their answers. It does NOT reconnect by itself after `replaced`, `revoked` or
- * `unsupported_version`: two copies of the plugin would otherwise take turns forever, and a
- * revoked or outdated client cannot succeed. `reconnect()` (the `/skaile:skaile reconnect` command)
- * and a newly stored token lift that.
+ * their answers. It connects only when asked (a tool call or `reconnect()`), and only
+ * `reconnect()` (the `/skaile:skaile reconnect` command) takes the connection over from another
+ * session: any other connect is refused with `in_use` while one is live. It does NOT reconnect by
+ * itself after `in_use`, `replaced`, `revoked` or `unsupported_version`: two copies of the plugin
+ * would otherwise take turns forever, and a revoked or outdated client cannot succeed.
+ * `reconnect()` and a newly stored token lift that.
  */
 export class SkaileClient {
   private readonly config: Config
@@ -145,8 +174,16 @@ export class SkaileClient {
   private readonly stableAfterMs: number
   private readonly log: (message: string) => void
   private readonly onInbound: ((event: InboundEvent) => boolean) | undefined
+  private readonly clientLabel: string | undefined
 
-  private status: ConnectionStatus = { state: 'stopped', reason: 'no_token', message: 'not started' }
+  private status: ConnectionStatus = { state: 'stopped', reason: 'idle', message: IDLE_MESSAGE }
+  /**
+   * Set by reconnect(): its attempts, retries included, ask to take the connection over until one
+   * is welcomed or the client stops. No other connect takes it over.
+   */
+  private takeoverPending = false
+  /** When (epoch ms) this client's own connection last dropped; the server may still count it live. */
+  private droppedAt: number | null = null
   private live: Live | null = null
   /** Incremented per connection, so callbacks of an old one are ignored. */
   private generation = 0
@@ -183,6 +220,7 @@ export class SkaileClient {
     this.stableAfterMs = options.stableAfterMs ?? STABLE_CONNECTION_MS
     this.log = options.log ?? (() => undefined)
     this.onInbound = options.onInbound
+    this.clientLabel = options.clientLabel
   }
 
   getStatus(): ConnectionStatus {
@@ -194,7 +232,10 @@ export class SkaileClient {
     return this.lastPeers
   }
 
-  /** Starts connecting in the background (at MCP server start). Never throws. */
+  /**
+   * Starts connecting in the background, without taking over. Never throws. The plugin itself
+   * does not call it: it connects on the first Skaile tool call.
+   */
   start(): void {
     void this.connect().catch(() => undefined)
   }
@@ -213,12 +254,13 @@ export class SkaileClient {
       if (reason === 'replaced' || reason === 'unsupported_version' || reason === 'closed') {
         throw new SkaileError(reason === 'closed' ? 'not_connected' : reason)
       }
-      // revoked, unauthorized, no_token: only a different token can help.
       const token = await this.tokens.read()
       if (!token) {
         throw new SkaileError('no_token')
       }
-      if (token === this.stoppedToken) {
+      // revoked, unauthorized, no_token: only a different token can help. idle, in_use: try again
+      // (the holder may be gone), still without taking over.
+      if (reason !== 'idle' && reason !== 'in_use' && token === this.stoppedToken) {
         throw new SkaileError(reason === 'no_token' ? 'no_token' : reason)
       }
     }
@@ -232,7 +274,10 @@ export class SkaileClient {
     throw this.notConnectedError()
   }
 
-  /** `/skaile:skaile reconnect`: drops the current connection (if any), re-reads the token and connects. */
+  /**
+   * `/skaile:skaile reconnect`: drops the current connection (if any), re-reads the token and
+   * connects with `takeover`, which replaces another session's live connection.
+   */
   async reconnect(): Promise<ConnectionStatus> {
     if (this.closed) {
       return this.status
@@ -245,6 +290,8 @@ export class SkaileClient {
     this.attempt = 0
     this.resetUnauthorized()
     this.stoppedToken = null
+    this.droppedAt = null
+    this.takeoverPending = true
     await this.connect().catch(() => undefined)
     return this.status
   }
@@ -252,6 +299,7 @@ export class SkaileClient {
   /** Stops for good (MCP server shutdown). */
   close(): void {
     this.closed = true
+    this.takeoverPending = false
     this.clearRetry()
     this.dropLive(new SkaileError('not_connected', describeError('not_connected', 'shutting down')))
     this.status = { state: 'stopped', reason: 'closed', message: 'closed' }
@@ -371,6 +419,12 @@ export class SkaileClient {
     if (live.replies > MAX_REPLIES_PER_MINUTE) {
       this.log(`Skaile asked for more than ${MAX_REPLIES_PER_MINUTE} replies in a minute; dropping the connection`)
       this.endLive(live, CLOSE_CONNECTION_LOST, 'connection_lost')
+      // Over long-poll the server still counts the dropped connection live for up to 60 s, and it
+      // is this client's own: the next attempts replace it instead of meeting it as `in_use`. A
+      // WebSocket close is seen at once, so there a takeover could only displace another session.
+      if (live.transport.kind === 'long-poll' && this.status.state === 'retrying') {
+        this.takeoverPending = true
+      }
       return
     }
     this.sendFrame(live, frame)
@@ -393,7 +447,14 @@ export class SkaileClient {
   }
 
   private async connectOnce(): Promise<void> {
-    const token = await this.tokens.read()
+    let token: string | null
+    try {
+      token = await this.tokens.read()
+    } catch (error) {
+      // A takeover asked for by a reconnect that never reached the server must not fire later.
+      this.takeoverPending = false
+      throw error
+    }
     if (this.closed) {
       return
     }
@@ -401,6 +462,7 @@ export class SkaileClient {
       this.stop('no_token', describeError('no_token'), null)
       return
     }
+    const takeover = this.takeoverPending
     this.attempt += 1
     this.status = { state: 'connecting', attempt: this.attempt }
     const generation = ++this.generation
@@ -410,6 +472,8 @@ export class SkaileClient {
       protocolVersion: HARNESS_CHANNEL_PROTOCOL_VERSION,
       harnessKind: HARNESS_KIND,
       clientVersion: CLIENT_VERSION,
+      ...(takeover ? { takeover: true } : {}),
+      ...(this.clientLabel ? { clientLabel: this.clientLabel } : {}),
     }
     /** Frames that came behind the `welcome` before the connection was set up; replayed after. */
     const early: string[] = []
@@ -515,6 +579,8 @@ export class SkaileClient {
     // The token was accepted. The backoff resets only once the connection has stayed up (endLive).
     this.resetUnauthorized()
     this.stoppedToken = null
+    this.droppedAt = null
+    this.takeoverPending = false
     this.status = {
       state: 'connected',
       transport: transport.kind,
@@ -608,6 +674,9 @@ export class SkaileClient {
       case 'rate_limited':
         this.scheduleRetry('rate limited', frame.retryAfterMs)
         return
+      case 'in_use':
+        this.onInUse(frame.message, token)
+        return
       default:
         this.scheduleRetry(`${frame.code}: ${frame.message}`)
     }
@@ -628,9 +697,25 @@ export class SkaileClient {
       case HARNESS_CHANNEL_CLOSE_CODES.unauthorized:
         this.onUnauthorized(token)
         return
+      case HARNESS_CHANNEL_CLOSE_CODES.in_use:
+        this.onInUse(undefined, token)
+        return
       default:
         this.scheduleRetry(`connection closed (${code}${reason ? ` ${reason}` : ''})`)
     }
+  }
+
+  /**
+   * Another connection of the agent is live. Right after this client's own connection dropped,
+   * that may be its own dead one the server has not noticed yet: keep retrying, as before 1.1.
+   * Otherwise stop and say who holds it; only /skaile:skaile reconnect takes it over.
+   */
+  private onInUse(detail: string | undefined, token: string): void {
+    if (this.droppedAt !== null && Date.now() - this.droppedAt < 2 * this.heartbeatTimeoutMs) {
+      this.scheduleRetry(`in use (${detail ?? 'another connection is live'}); it may be this session's dropped one`)
+      return
+    }
+    this.stop('in_use', describeError('in_use', detail), token)
   }
 
   private resetUnauthorized(): void {
@@ -653,6 +738,8 @@ export class SkaileClient {
     // A new token (or /skaile:skaile reconnect) starts afresh: its own refusal clock and the first delay.
     this.resetUnauthorized()
     this.attempt = 0
+    this.droppedAt = null
+    this.takeoverPending = false
     this.stoppedToken = token
     this.status = { state: 'stopped', reason, message }
     this.log(`stopped: ${message}`)
@@ -696,7 +783,10 @@ export class SkaileClient {
   private notConnectedError(): SkaileError {
     const status = this.status
     if (status.state === 'stopped') {
-      return new SkaileError(status.reason === 'closed' ? 'not_connected' : status.reason)
+      if (status.reason === 'in_use') {
+        return new SkaileError('in_use', status.message)
+      }
+      return new SkaileError(status.reason === 'closed' || status.reason === 'idle' ? 'not_connected' : status.reason)
     }
     if (status.state === 'retrying') {
       return new SkaileError('not_connected', describeError('not_connected', status.lastError))
@@ -883,11 +973,14 @@ export class SkaileClient {
       this.attempt = 0
     }
     this.afterClose(code, reason, live.token)
+    if (this.status.state === 'retrying') {
+      this.droppedAt = Date.now()
+    }
     // The server ends an ask whose connection dropped with peer_offline; say so at once.
     const status = this.status
     const failure =
       status.state === 'stopped' && status.reason !== 'closed' && status.reason !== 'no_token'
-        ? new SkaileError(status.reason)
+        ? new SkaileError(status.reason === 'idle' ? 'not_connected' : status.reason, status.message)
         : new SkaileError(
             'peer_offline',
             `peer_offline: the connection to Skaile dropped (${reason || code}) before the answer came; the question is lost. ${status.state === 'retrying' ? 'Reconnecting; try again in a moment.' : ''}`.trim(),
